@@ -2,23 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BRICS Unit Basket v1 – True Market 5s TWAP + Candles</title>
+<title>BRICS Unit Basket v1 – Live TWAP + Candles</title>
 <style>
-body { background:#0b0f14; color:#FFD700; font-family: Arial; padding:20px; }
+body { background:#0b0f14; color:#FFD700; font-family: Arial, sans-serif; padding:20px; }
 .container { max-width:900px; margin:auto; }
 h1 { text-align:center; color:#FFD700; }
-.price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; color:#FFD700; }
-.price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#FFD700; }
-.row { margin:5px 0; font-size:1.1em; color:#FFD700; }
+.price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
+.price-box .price { font-size:2em; text-align:center; margin:10px 0; }
+.row { margin:5px 0; font-size:1.1em; }
 #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
-select { margin-top:10px; padding:5px; font-size:1em; color:#0b0f14; background:#FFD700; font-weight:bold; border-radius:4px; border:none; }
+select { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#FFD700; border:none; border-radius:4px; }
 .footnote { font-size:0.85em; color:#FFD700; margin-top:20px; line-height:1.4; }
 </style>
 </head>
 <body>
 
 <div class="container">
-<h1>BRICS Unit Basket v1 – Live True Market 5s TWAP + Candles</h1>
+<h1>BRICS Unit Basket v1 – Live TWAP + Candles</h1>
 
 <div class="price-box">
 <div class="price">Reference Price (USD): <strong><span id="unitUsd">…</span></strong></div>
@@ -45,18 +45,16 @@ Timeframe:
 <div id="chart"></div>
 
 <div class="footnote">
-<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; 5-second TWAP for all 6 assets computed locally; chart updates every second; selectable timeframes; history persisted across reloads; last 1000 candles per timeframe in browser.
+<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; server-side 5-second TWAP; chart updates every second; selectable timeframes; last 1000 candles persisted in browser; server provides full historical OHLC.
 </div>
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-const FX_FEED_URL = "https://YOUR_SERVER_URL/fx_rates.json";
-const GOLD_FEED_URL = "https://YOUR_SERVER_URL/gold.json";
-const OHLC_URL = "https://YOUR_SERVER_URL/ohlc";
-const updateInterval = 1000;
-const TWAP_WINDOW = 5; // seconds
-const MAX_CANDLES = 1000;
+const FEED_URL = "https://YOUR_SERVER_URL/latest.json";  // replace with your server
+const OHLC_URL = "https://YOUR_SERVER_URL/ohlc";          // replace with your server
+const updateInterval = 1000; // 1 second polling
+const MAX_CANDLES = 1000;    // max in-browser candles
 
 // ===== Chart Setup =====
 const chartContainer = document.getElementById('chart');
@@ -73,16 +71,12 @@ let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
 
-// ===== Rolling price buffers for 5s TWAP =====
-let fxHistory = [];
-let goldHistory = [];
-
-// ===== Candle helpers =====
+// Convert seconds to nearest candle time
 function getCandleTime(ts, tf_min) {
     return Math.floor(ts/(tf_min*60))*tf_min*60;
 }
 
-// ===== Load historical candles =====
+// Load server-side historical candles
 async function loadHistoricalCandles() {
     try {
         const res = await fetch(`${OHLC_URL}?timeframe=${timeframeMin}&limit=${MAX_CANDLES}`);
@@ -94,87 +88,33 @@ async function loadHistoricalCandles() {
     } catch(e) { console.error("Failed to load historical candles", e); }
 }
 
-// ===== Compute True Market Unit USD with 5s TWAP =====
-async function computeUnitUSD() {
+// Update TWAP display and candle chart
+async function updateTWAP() {
     try {
-        const [fxRes, goldRes] = await Promise.all([
-            fetch(FX_FEED_URL),
-            fetch(GOLD_FEED_URL)
-        ]);
-        const fx = await fxRes.json();
-        const goldData = await goldRes.json();
+        const res = await fetch(FEED_URL);
+        const d = await res.json();
+        const tsUnix = new Date(d.timestamp_utc).getTime()/1000;
 
-        const timestamp = new Date(goldData.timestamp_utc).getTime()/1000;
+        document.getElementById("unitUsd").innerText = d.unit_usd.toFixed(2);
+        document.getElementById("unitGold").innerText = d.unit_gold_grams.toFixed(6);
+        document.getElementById("hundredUsd").innerText = (d.hundred_units_usd).toFixed(2);
+        document.getElementById("goldTwap").innerText = d.gold_usd_per_oz_twap.toFixed(2);
+        document.getElementById("timestamp").innerText = d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-        // Add to rolling history
-        fxHistory.push({...fx, ts: timestamp});
-        goldHistory.push({usd_per_oz: goldData.usd_per_oz, ts: timestamp});
-
-        // Remove old entries outside TWAP window
-        fxHistory = fxHistory.filter(p => p.ts >= timestamp - TWAP_WINDOW);
-        goldHistory = goldHistory.filter(p => p.ts >= timestamp - TWAP_WINDOW);
-
-        // Compute 5s TWAP
-        const avgGold = goldHistory.reduce((sum,p) => sum + p.usd_per_oz,0)/goldHistory.length;
-        const avgFX = {};
-        ["BRL","RUB","INR","CNY","ZAR"].forEach(c=> {
-            avgFX[c] = fxHistory.reduce((sum,p) => sum + p[c],0)/fxHistory.length;
-        });
-
-        // Basket weights
-        const weights = { gold: 0.40, BRL:0.12, RUB:0.12, INR:0.12, CNY:0.12, ZAR:0.12 };
-
-        // Gold in grams
-        const goldGram = avgGold / 31.1034768;
-
-        // Compute weighted unit price
-        let unitUSD = weights.gold * goldGram;
-        unitUSD += weights.BRL * avgFX.BRL;
-        unitUSD += weights.RUB * avgFX.RUB;
-        unitUSD += weights.INR * avgFX.INR;
-        unitUSD += weights.CNY * avgFX.CNY;
-        unitUSD += weights.ZAR * avgFX.ZAR;
-
-        // Update UI
-        document.getElementById("unitUsd").innerText = unitUSD.toFixed(2);
-        document.getElementById("unitGold").innerText = goldGram.toFixed(6);
-        document.getElementById("hundredUsd").innerText = (unitUSD*100).toFixed(2);
-        document.getElementById("goldTwap").innerText = avgGold.toFixed(2);
-        document.getElementById("timestamp").innerText = goldData.timestamp_utc.replace("T"," ").replace("Z"," UTC");
-
-        return {unitUSD, timestamp: goldData.timestamp_utc};
-
-    } catch(e) { console.error("Failed to compute Unit USD", e); return null; }
-}
-
-// ===== Update Candles =====
-async function updateCandles() {
-    const data = await computeUnitUSD();
-    if(!data) return;
-
-    const tsUnix = new Date(data.timestamp).getTime()/1000;
-    const candleTime = getCandleTime(tsUnix, timeframeMin);
-
-    if(!currentCandle || currentCandle.time !== candleTime){
-        if(currentCandle) candles.push(currentCandle);
-        currentCandle = { time: candleTime, open: data.unitUSD, high: data.unitUSD, low: data.unitUSD, close: data.unitUSD };
-        if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
-        candleSeries.setData(candles.concat([currentCandle]));
-
-        // Persist to server
-        fetch(`${OHLC_URL}/update`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(currentCandle)
-        });
-
-        localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
-    } else {
-        currentCandle.high = Math.max(currentCandle.high, data.unitUSD);
-        currentCandle.low = Math.min(currentCandle.low, data.unitUSD);
-        currentCandle.close = data.unitUSD;
-        candleSeries.update(currentCandle);
-    }
+        const candleTime = getCandleTime(tsUnix, timeframeMin);
+        if(!currentCandle || currentCandle.time !== candleTime){
+            if(currentCandle) candles.push(currentCandle);
+            currentCandle = { time: candleTime, open: d.unit_usd, high: d.unit_usd, low: d.unit_usd, close: d.unit_usd };
+            if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
+            candleSeries.setData(candles.concat([currentCandle]));
+            localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
+        } else {
+            currentCandle.high = Math.max(currentCandle.high, d.unit_usd);
+            currentCandle.low = Math.min(currentCandle.low, d.unit_usd);
+            currentCandle.close = d.unit_usd;
+            candleSeries.update(currentCandle);
+        }
+    } catch(e) { console.error("Feed fetch error", e); }
 }
 
 // ===== Initial Load =====
@@ -185,17 +125,15 @@ async function init() {
     candleSeries.setData(candles);
 
     await loadHistoricalCandles();
-    updateCandles();
-    setInterval(updateCandles, updateInterval);
+    updateTWAP();
+    setInterval(updateTWAP, updateInterval);
 }
+init();
 
-// ===== Handle timeframe change =====
 document.getElementById('timeframe').addEventListener('change', ()=>{
     timeframeMin = parseInt(document.getElementById('timeframe').value);
     init();
 });
-
-init();
 </script>
 </body>
 </html>
