@@ -5,16 +5,16 @@
   <title>BRICS Unit Basket v1 – TWAP + Candles</title>
 
   <style>
-    body { background:#0b0f14; color:#eaeaea; font-family:Arial,sans-serif; padding:20px; }
+    body { background:#0b0f14; color:#ffd700; font-family:Arial,sans-serif; padding:20px; }
     .container { max-width:950px; margin:auto; }
     h1 { text-align:center; color:#ffd700; }
     .price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
     .price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#ffd700; }
-    .row { margin:5px 0; font-size:1.1em; }
+    .row { margin:5px 0; font-size:1.1em; color:#ffd700; }
     #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
-    select { margin-top:10px; padding:5px; font-size:1em; }
-    .fx-row { display:flex; justify-content:space-between; background:#1a1f28; padding:5px 10px; border-radius:4px; margin:2px 0; }
-    .fx-row span { font-weight:bold; color:#ffd700; }
+    select { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#ffd700; border:1px solid #333; }
+    .fx-row { display:flex; justify-content:space-between; background:#1a1f28; padding:5px 10px; border-radius:4px; margin:2px 0; color:#ffd700; }
+    .fx-row span { font-weight:bold; }
     .footnote { font-size:.85em; color:#aaa; margin-top:20px; line-height:1.4; }
   </style>
 </head>
@@ -56,82 +56,67 @@ All FX legs float live vs USD. Server-side 5s TWAP.
 </div>
 </div>
 
-<!-- ✅ v5 library -->
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 
 <script>
 const FEED_URL = "/latest.json";
-const OHLC_URL = "/ohlc";
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
-
-const chart = LightweightCharts.createChart(
-  document.getElementById("chart"),
-  {
-    layout:{ background:{color:"#0b0f14"}, textColor:"#eaeaea" },
-    grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
-    timeScale:{ timeVisible:true, secondsVisible:true }
-  }
-);
-
-/* ✅ v5 SERIES API */
-const candleSeries = chart.addSeries(
-  LightweightCharts.CandlestickSeries,
-  {
-    upColor:"#ffd700",
-    downColor:"#ff4b4b",
-    wickUpColor:"#ffd700",
-    wickDownColor:"#ff4b4b",
-    borderVisible:false
-  }
-);
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  layout:{ background:{color:"#0b0f14"}, textColor:"#ffd700" },
+  grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
+  timeScale:{ timeVisible:true, secondsVisible:true }
+});
+const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+  upColor:"#ffd700", downColor:"#ff4b4b",
+  wickUpColor:"#ffd700", wickDownColor:"#ff4b4b",
+  borderVisible:false
+});
 
 const fxContainer = document.getElementById("fxContainer");
 FX_LIST.forEach(ccy=>{
   const d=document.createElement("div");
-  d.className="fx-row";
-  d.id="fx_"+ccy;
+  d.className="fx-row"; d.id="fx_"+ccy;
   d.innerHTML=`<span>${ccy}</span><span>…</span>`;
   fxContainer.appendChild(d);
 });
 
 function candleTime(ts,tf){ return Math.floor(ts/(tf*60)); }
-
 let candles=[], current=null;
 let tf=parseInt(document.getElementById("timeframe").value);
 
 async function tick(){
-  const d=await (await fetch(FEED_URL)).json();
+  try {
+    const d=await (await fetch(FEED_URL)).json();
+    document.getElementById("unitUsd").textContent=d.unit_usd.toFixed(2);
+    document.getElementById("unitGold").textContent=d.unit_gold_grams.toFixed(6);
+    document.getElementById("hundredUsd").textContent=d.hundred_units_usd.toFixed(2);
+    document.getElementById("goldTwap").textContent=d.gold_usd_per_oz_twap.toFixed(2);
+    document.getElementById("timestamp").textContent=d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-  unitUsd.textContent=d.unit_usd.toFixed(2);
-  unitGold.textContent=d.unit_gold_grams.toFixed(6);
-  hundredUsd.textContent=d.hundred_units_usd.toFixed(2);
-  goldTwap.textContent=d.gold_usd_per_oz_twap.toFixed(2);
-  timestamp.textContent=d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+    FX_LIST.forEach(c=>{
+      document.querySelector(`#fx_${c} span:last-child`)
+        .textContent=(1/d.fx_usd_twap[c]).toFixed(2);
+    });
 
-  FX_LIST.forEach(c=>{
-    document.querySelector(`#fx_${c} span:last-child`)
-      .textContent=(1/d.fx_usd_twap[c]).toFixed(2);
-  });
-
-  const t=candleTime(Date.now()/1000,tf);
-  if(!current||current.time!==t){
-    if(current) candles.push(current);
-    current={time:t,open:d.unit_usd,high:d.unit_usd,low:d.unit_usd,close:d.unit_usd};
-    candleSeries.setData(candles.concat([current]));
-  } else {
-    current.high=Math.max(current.high,d.unit_usd);
-    current.low=Math.min(current.low,d.unit_usd);
-    current.close=d.unit_usd;
-    candleSeries.update(current);
-  }
+    const t=candleTime(Date.now()/1000,tf);
+    if(!current||current.time!==t){
+      if(current) candles.push(current);
+      current={time:t,open:d.unit_usd,high:d.unit_usd,low:d.unit_usd,close:d.unit_usd};
+      candleSeries.setData(candles.concat([current]));
+    } else {
+      current.high=Math.max(current.high,d.unit_usd);
+      current.low=Math.min(current.low,d.unit_usd);
+      current.close=d.unit_usd;
+      candleSeries.update(current);
+    }
+  } catch(e){ console.error("Tick error:", e); }
 }
 
 tick();
 setInterval(tick,1000);
 
 document.getElementById("timeframe").onchange=e=>{
-  tf=parseInt(e.target.value);
-  candles=[]; current=null;
+  tf=parseInt(e.target.value); candles=[]; current=null;
 };
 </script>
 </body>
