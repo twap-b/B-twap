@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <title>BRICS Unit Basket v1 – TWAP + Persistent Candles</title>
 <style>
-body { background:#0b0f14; color:#eaeaea; font-family: Arial; padding:20px; }
+body { background:#0b0f14; color:#eaeaea; font-family: Arial, sans-serif; padding:20px; }
 .container { max-width:900px; margin:auto; }
-h1 { text-align:center; }
+h1 { text-align:center; color:#ffd700; } /* gold header */
 .price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
-.price-box .price { font-size:2em; text-align:center; margin:10px 0; }
+.price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#ffd700; } /* gold price */
 .row { margin:5px 0; font-size:1.1em; }
 #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
 select { margin-top:10px; padding:5px; font-size:1em; }
@@ -51,7 +51,7 @@ Timeframe:
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-const SERVER_URL = "https://b-twap.onrender.com"; // <-- YOUR LIVE RENDER URL
+const SERVER_URL = "https://b-twap.onrender.com";
 const FEED_URL = SERVER_URL + "/latest.json";
 const OHLC_URL = SERVER_URL + "/ohlc";
 const updateInterval = 1000;
@@ -64,21 +64,27 @@ const chart = LightweightCharts.createChart(chartContainer, {
     rightPriceScale: { borderColor:'#555' },
     timeScale: { borderColor:'#555', timeVisible:true, secondsVisible:true }
 });
-const candleSeries = chart.addCandlestickSeries({ upColor: '#4bff4b', downColor: '#ff4976', borderVisible:false, wickColor: '#eee' });
+const candleSeries = chart.addCandlestickSeries({ upColor: '#ffd700', downColor: '#ff4b4b', borderVisible:false, wickColor: '#eee' });
 
 let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
 
 function getCandleTime(ts, tf_min) {
-    return Math.floor(ts/(tf_min*60))*tf_min*60;
+    return Math.floor(ts / (tf_min * 60)) * tf_min * 60;
 }
 
 async function loadHistoricalCandles() {
     try {
         const res = await fetch(`${OHLC_URL}?timeframe=${timeframeMin}&limit=${MAX_CANDLES}`);
         const data = await res.json();
-        candles = data || [];
+        candles = data.map(c => ({
+            time: Math.floor(c.time / 1000),
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close
+        }));
         if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
         currentCandle = candles.length ? candles[candles.length-1] : null;
         candleSeries.setData(candles);
@@ -89,7 +95,7 @@ async function updateTWAP() {
     try {
         const res = await fetch(FEED_URL);
         const d = await res.json();
-        const tsUnix = new Date(d.timestamp_utc).getTime()/1000;
+        const tsUnix = new Date(d.timestamp_utc).getTime() / 1000;
 
         document.getElementById("unitUsd").innerText = d.unit_usd.toFixed(2);
         document.getElementById("unitGold").innerText = d.unit_gold_grams.toFixed(6);
@@ -114,7 +120,13 @@ async function updateTWAP() {
 }
 
 async function init() {
-    candles = JSON.parse(localStorage.getItem("candles_" + timeframeMin)) || [];
+    candles = (JSON.parse(localStorage.getItem("candles_" + timeframeMin)) || []).map(c => ({
+        time: Math.floor(c.time),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
+    }));
     if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
     currentCandle = candles.length ? candles[candles.length-1] : null;
     candleSeries.setData(candles);
@@ -124,6 +136,7 @@ async function init() {
     updateTWAP();
     setInterval(updateTWAP, updateInterval);
 }
+
 init();
 
 document.getElementById('timeframe').addEventListener('change', ()=>{
@@ -131,5 +144,6 @@ document.getElementById('timeframe').addEventListener('change', ()=>{
     init();
 });
 </script>
+
 </body>
 </html>
