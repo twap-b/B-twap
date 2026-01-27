@@ -5,15 +5,15 @@
 <title>BRICS Unit Basket v1 – TWAP + Candles</title>
 <style>
 body { background:#0b0f14; color:#eaeaea; font-family: Arial, sans-serif; padding:20px; }
-.container { max-width:900px; margin:auto; }
+.container { max-width:950px; margin:auto; }
 h1 { text-align:center; color:#ffd700; }
 .price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
 .price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#ffd700; }
 .row { margin:5px 0; font-size:1.1em; }
 #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
 select { margin-top:10px; padding:5px; font-size:1em; }
-.fx-box { display:flex; flex-wrap:wrap; justify-content:space-around; background:#151a21; padding:10px; border-radius:8px; margin-top:10px; }
-.fx-box .fx { flex:1; margin:5px; text-align:center; background:#1a1f26; padding:10px; border-radius:5px; }
+.fx-row { display:flex; justify-content: space-between; background:#1a1f28; padding:5px 10px; border-radius:4px; margin:2px 0; }
+.fx-row span { font-weight:bold; color:#ffd700; }
 .footnote { font-size:0.85em; color:#aaa; margin-top:20px; line-height:1.4; }
 </style>
 </head>
@@ -29,7 +29,7 @@ select { margin-top:10px; padding:5px; font-size:1em; }
 <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
 <div class="row">Last Update (UTC): <span id="timestamp">…</span></div>
 <div class="row">
-Timeframe: 
+Timeframe:
 <select id="timeframe">
 <option value="1">1 min</option>
 <option value="15">15 min</option>
@@ -42,9 +42,10 @@ Timeframe:
 <option value="43200">1 month</option>
 </select>
 </div>
+<div class="row">
+<div id="fxContainer"></div>
 </div>
-
-<div class="fx-box" id="fxContainer"></div>
+</div>
 
 <div id="chart"></div>
 
@@ -55,7 +56,7 @@ Timeframe:
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-const SERVER_URL = "http://localhost:3000"; // change if deployed
+const SERVER_URL = ""; // leave empty if frontend served from same server
 const FEED_URL = SERVER_URL + "/latest.json";
 const OHLC_URL = SERVER_URL + "/ohlc";
 const updateInterval = 1000;
@@ -75,44 +76,37 @@ let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
 
+// FX display
 const fxContainer = document.getElementById('fxContainer');
-
-// Initialize FX boxes
-function initFXBoxes() {
-    fxContainer.innerHTML = '';
-    FX_LIST.forEach(ccy=>{
-        const div = document.createElement('div');
-        div.className = 'fx';
-        div.id = 'fx_' + ccy;
-        div.innerHTML = `<strong>${ccy}</strong><br><span>…</span>`;
-        fxContainer.appendChild(div);
-    });
-}
-initFXBoxes();
+FX_LIST.forEach(ccy=>{
+    const div = document.createElement('div');
+    div.className = 'fx-row';
+    div.id = 'fx_' + ccy;
+    div.innerHTML = `<span>${ccy}</span> : <span>…</span> units/USD`;
+    fxContainer.appendChild(div);
+});
 
 function getCandleTime(ts, tf_min) {
     return Math.floor(ts / (tf_min * 60));
 }
 
-// Load historical candles
 async function loadHistoricalCandles() {
     try {
         const res = await fetch(`${OHLC_URL}?timeframe=${timeframeMin}&limit=${MAX_CANDLES}`);
         const data = await res.json();
         candles = data.map(c => ({
-            time: Math.floor(c.time/1000),
+            time: Math.floor(c.time),
             open: c.open,
             high: c.high,
             low: c.low,
             close: c.close
         }));
-        if (candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
+        if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
         currentCandle = candles.length ? {...candles[candles.length-1]} : null;
         candleSeries.setData(candles);
     } catch(e){ console.error("Failed to load historical candles", e);}
 }
 
-// Update TWAP and FX contributions
 async function updateTWAP() {
     try {
         const res = await fetch(FEED_URL);
@@ -125,15 +119,16 @@ async function updateTWAP() {
         document.getElementById("goldTwap").innerText = d.gold_usd_per_oz_twap.toFixed(2);
         document.getElementById("timestamp").innerText = d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
+        // FX units per USD
         if(d.fx_usd_twap) {
             FX_LIST.forEach(ccy=>{
                 const div = document.getElementById('fx_' + ccy);
-                const value = d.fx_usd_twap[ccy];
-                div.querySelector('span').innerText = value.toFixed(4);
+                const unitsPerUSD = 1 / d.fx_usd_twap[ccy];
+                div.querySelector('span:last-child').innerText = unitsPerUSD.toFixed(2);
             });
         }
 
-        // Update candle
+        // Candle update
         const candleTime = getCandleTime(tsUnix, timeframeMin);
         if(!currentCandle || currentCandle.time !== candleTime){
             if(currentCandle) candles.push(currentCandle);
@@ -148,15 +143,11 @@ async function updateTWAP() {
             candleSeries.update(currentCandle);
         }
 
-        // Auto-scale Y-axis
-        chart.priceScale('right').applyOptions({ autoScale: true });
-
     } catch(e){ console.error("Feed fetch error", e);}
 }
 
-// Init
 async function init() {
-    // load candles from localStorage first
+    // Load persisted candles
     candles = (JSON.parse(localStorage.getItem("candles_" + timeframeMin)) || []).map(c => ({
         time: Math.floor(c.time),
         open: c.open,
@@ -169,7 +160,7 @@ async function init() {
     candleSeries.setData(candles);
 
     await loadHistoricalCandles();
-    await updateTWAP();
+    updateTWAP();
     setInterval(updateTWAP, updateInterval);
 }
 
