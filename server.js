@@ -15,13 +15,16 @@ const UNIT_BASE_GOLD = 0.9823;
 const GOLD_WEIGHT = 0.40;
 const FX_WEIGHT = 0.12;
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
-const TWAP_WINDOW_MS = 5 * 1000; // 5-second TWAP
-const UPDATE_INTERVAL_MS = 1000; // 1-second fetch interval
+const TWAP_WINDOW_MS = 5000; // 5-second TWAP
+const MAX_CANDLES = 1000;
 
 // ===== Storage =====
-let goldHistory = [];           // { ts, price_usd_per_oz }
-let fxHistory = { };            // { BRL: [{ts,value}], ... for all 5 currencies }
+let goldHistory = [];
+let fxHistory = {};
 FX_LIST.forEach(ccy => fxHistory[ccy] = []);
+
+let candlesStore = {}; // { timeframe_min: [ {time, open, high, low, close} ] }
+let currentCandle = {}; // { timeframe_min: candle }
 
 // ===== Helpers =====
 function twap(history) {
@@ -33,79 +36,110 @@ function twap(history) {
 function storePrice(history, value) {
     const ts = Date.now();
     history.push({ ts, value });
-    // Keep only last TWAP_WINDOW_MS
     return history.filter(x => ts - x.ts <= TWAP_WINDOW_MS);
+}
+
+// Align timestamp to nearest candle start
+function getCandleTime(ts, tf_min) {
+    return Math.floor(ts / (tf_min * 60 * 1000)) * tf_min * 60;
 }
 
 // ===== Fetch Market Data =====
 async function getGoldUSDPerOz() {
     const res = await fetch("https://api.metals.live/v1/spot/gold");
     const data = await res.json();
-    return data[0].gold; // USD per troy oz
+    return data[0].gold;
 }
 
 async function getFXRates() {
     const res = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","));
     const json = await res.json();
-    return json.rates; // USD base
+    return json.rates;
 }
 
-// ===== Compute Unit Price =====
+// ===== Compute True-Market Unit Price =====
 async function generateUnitPrice() {
-    // 1️⃣ Get market data
     const goldUSDPerOz = await getGoldUSDPerOz();
-    const fxRates = await getFXRates(); // USD per currency
+    const fxRates = await getFXRates();
 
-    // 2️⃣ Update histories (TWAP)
+    // Update TWAP histories
     goldHistory = storePrice(goldHistory, goldUSDPerOz);
     FX_LIST.forEach(ccy => {
         const valueUSD = 1 / fxRates[ccy]; // 1 unit of currency in USD
         fxHistory[ccy] = storePrice(fxHistory[ccy], valueUSD);
     });
 
-    // 3️⃣ Compute TWAPs
     const goldTWAP = twap(goldHistory);
     const fxTWAP = {};
     FX_LIST.forEach(ccy => fxTWAP[ccy] = twap(fxHistory[ccy]));
 
-    // 4️⃣ Compute Unit Gold Amount
-    const unitGold = UNIT_BASE_GOLD * (
-        GOLD_WEIGHT +
-        FX_LIST.reduce((sum, ccy) => sum + FX_WEIGHT, 0)
-    );
+    // Compute Unit gold amount
+    const unitGold = UNIT_BASE_GOLD * (GOLD_WEIGHT + FX_LIST.reduce((sum,_)=>sum+FX_WEIGHT,0));
 
-    // 5️⃣ Compute USD per Unit
-    const goldComponentUSD = GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
-    let fxComponentUSD = 0;
-    FX_LIST.forEach(ccy => {
-        fxComponentUSD += FX_WEIGHT * unitGold * fxTWAP[ccy]; 
-    });
+    // Compute USD contributions
+    const goldUSD = GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
+    let fxUSD = 0;
+    FX_LIST.forEach(ccy => fxUSD += FX_WEIGHT * unitGold * fxTWAP[ccy]);
 
-    const unitUSD = goldComponentUSD + fxComponentUSD;
+    const unitUSD = goldUSD + fxUSD;
 
-    return {
-        timestamp_utc: new Date().toISOString(),
-        gold_usd_per_oz_twap: goldTWAP,
-        fx_usd_twap: fxTWAP,             // TWAP of all 5 currencies
-        unit_gold_grams: unitGold,
-        unit_usd: unitUSD,
-        hundred_units_usd: unitUSD * 100,
-    };
+    return { timestamp_utc: new Date().toISOString(), unitUSD, goldTWAP, fxTWAP, unitGold };
+}
+
+// ===== OHLC Candle Update =====
+function updateCandle(tf_min, price) {
+    const ts = Date.now();
+    const candleTime = getCandleTime(ts, tf_min);
+
+    if (!candlesStore[tf_min]) candlesStore[tf_min] = [];
+    if (!currentCandle[tf_min] || currentCandle[tf_min].time !== candleTime) {
+        if (currentCandle[tf_min]) {
+            candlesStore[tf_min].push(currentCandle[tf_min]);
+            if (candlesStore[tf_min].length > MAX_CANDLES) candlesStore[tf_min] = candlesStore[tf_min].slice(-MAX_CANDLES);
+        }
+        currentCandle[tf_min] = { time: candleTime, open: price, high: price, low: price, close: price };
+    } else {
+        const c = currentCandle[tf_min];
+        c.high = Math.max(c.high, price);
+        c.low = Math.min(c.low, price);
+        c.close = price;
+    }
 }
 
 // ===== Routes =====
 app.get('/latest.json', async (req, res) => {
     try {
         const unit = await generateUnitPrice();
-        res.json(unit);
-    } catch (e) {
+
+        // Update all candle timeframes with latest price
+        const tfList = [1,15,30,60,180,1440,4320,10080,43200]; // in minutes
+        tfList.forEach(tf => updateCandle(tf, unit.unitUSD));
+
+        res.json({
+            timestamp_utc: unit.timestamp_utc,
+            gold_usd_per_oz_twap: unit.goldTWAP,
+            fx_usd_twap: unit.fxTWAP,
+            unit_gold_grams: unit.unitGold,
+            unit_usd: unit.unitUSD,
+            hundred_units_usd: unit.unitUSD * 100
+        });
+    } catch(e) {
         console.error(e);
         res.status(500).send("Failed to compute Unit price");
     }
 });
 
-// ===== Start Server =====
-app.listen(PORT, () => {
-    console.log(`BRICS TWAP server running on port ${PORT}`);
+app.get('/ohlc', (req,res) => {
+    const tf = parseInt(req.query.timeframe) || 1;
+    const limit = parseInt(req.query.limit) || MAX_CANDLES;
+    const data = candlesStore[tf] || [];
+    res.json(data.slice(-limit));
 });
 
+app.post('/ohlc/update', (req,res) => {
+    // Optional: external POST updates (we already update internally)
+    res.json({status:"ok"});
+});
+
+// ===== Start Server =====
+app.listen(PORT, () => console.log(`BRICS TWAP server running on port ${PORT}`));
