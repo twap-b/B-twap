@@ -54,14 +54,14 @@ Timeframe:
 const SERVER_URL = "https://b-twap.onrender.com";
 const FEED_URL = SERVER_URL + "/latest.json";
 const OHLC_URL = SERVER_URL + "/ohlc";
-const updateInterval = 1000;
+const UPDATE_INTERVAL = 1000;
 const MAX_CANDLES = 1000;
 
 const chartContainer = document.getElementById('chart');
 const chart = LightweightCharts.createChart(chartContainer, {
     layout: { backgroundColor: '#0b0f14', textColor: '#eaeaea' },
     grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
-    rightPriceScale: { borderColor:'#555' },
+    rightPriceScale: { borderColor:'#555', autoScale: true },
     timeScale: { borderColor:'#555', timeVisible:true, secondsVisible:true }
 });
 const candleSeries = chart.addCandlestickSeries({ upColor: '#ffd700', downColor: '#ff4b4b', borderVisible:false, wickColor: '#eee' });
@@ -70,11 +70,12 @@ let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
 
-function getCandleTime(ts, tf_min) {
-    return Math.floor(ts / (tf_min * 60));
+// Round timestamp down to nearest timeframe (in seconds)
+function getCandleTime(ts, tf_min){
+    return Math.floor(ts / (tf_min * 60)) * (tf_min * 60);
 }
 
-async function loadHistoricalCandles() {
+async function loadHistoricalCandles(){
     try {
         const res = await fetch(`${OHLC_URL}?timeframe=${timeframeMin}&limit=${MAX_CANDLES}`);
         const data = await res.json();
@@ -88,11 +89,11 @@ async function loadHistoricalCandles() {
         if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
         currentCandle = candles.length ? {...candles[candles.length-1]} : null;
         candleSeries.setData(candles);
-    } catch(e){ console.error("Failed to load historical candles", e);}
+    } catch(e){ console.error("Failed to load historical candles", e); }
 }
 
-async function updateTWAP() {
-    try {
+async function updateTWAP(){
+    try{
         const res = await fetch(FEED_URL);
         const d = await res.json();
         const tsUnix = Math.floor(new Date(d.timestamp_utc).getTime()/1000);
@@ -109,17 +110,20 @@ async function updateTWAP() {
             currentCandle = { time: candleTime, open: d.unit_usd, high: d.unit_usd, low: d.unit_usd, close: d.unit_usd };
             if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
             candleSeries.setData(candles.concat([currentCandle]));
-            localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
         } else {
             currentCandle.high = Math.max(currentCandle.high, d.unit_usd);
             currentCandle.low = Math.min(currentCandle.low, d.unit_usd);
             currentCandle.close = d.unit_usd;
             candleSeries.update(currentCandle);
         }
+
+        // Auto-scale Y-axis on each update
+        chart.priceScale().applyOptions({ autoScale: true });
+
     } catch(e){ console.error("Feed fetch error", e);}
 }
 
-async function init() {
+async function init(){
     candles = (JSON.parse(localStorage.getItem("candles_" + timeframeMin)) || []).map(c => ({
         time: Math.floor(c.time),
         open: c.open,
@@ -133,7 +137,7 @@ async function init() {
 
     await loadHistoricalCandles();
     updateTWAP();
-    setInterval(updateTWAP, updateInterval);
+    setInterval(updateTWAP, UPDATE_INTERVAL);
 }
 
 init();
