@@ -32,8 +32,8 @@ let candlesStore = {};
 let currentCandle = {};
 
 // ===== Helpers =====
-function twap(history) {
-  if (!history.length) return null;
+function twap(history, fallback) {
+  if (!history.length) return fallback;
   return history.reduce((a, b) => a + b.value, 0) / history.length;
 }
 
@@ -57,8 +57,7 @@ async function safeFetchJSON(url, fallback) {
     if (!res.ok) throw new Error("Bad response");
 
     return await res.json();
-  } catch (e) {
-    console.warn("Fetch fallback:", url);
+  } catch {
     return fallback;
   }
 }
@@ -69,7 +68,7 @@ async function getGoldUSDPerOz() {
     "https://api.metals.live/v1/spot/gold",
     [{ gold: 1900 }]
   );
-  return Number(data[0]?.gold || 1900);
+  return Number(data[0].gold) || 1900;
 }
 
 async function getFXRates() {
@@ -93,70 +92,40 @@ async function generateUnitPrice() {
     fxHistory[ccy] = storePrice(fxHistory[ccy], v);
   });
 
-  const goldTWAP = twap(goldHistory);
+  const goldTWAP = twap(goldHistory, goldUSDPerOz);
+
   const fxTWAP = {};
-  FX_LIST.forEach(ccy => (fxTWAP[ccy] = twap(fxHistory[ccy]) || 0));
+  FX_LIST.forEach(ccy => {
+    fxTWAP[ccy] = twap(fxHistory[ccy], 1 / fxRates[ccy]);
+  });
 
   const unitGold =
     UNIT_BASE_GOLD *
     (GOLD_WEIGHT + FX_LIST.length * FX_WEIGHT);
 
   const goldUSD =
-    GOLD_WEIGHT * unitGold * ((goldTWAP || goldUSDPerOz) / GOLD_G_PER_OZ);
+    GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
 
   let fxUSD = 0;
   FX_LIST.forEach(ccy => {
-    fxUSD += FX_WEIGHT * unitGold * (fxTWAP[ccy] || 0);
+    fxUSD += FX_WEIGHT * unitGold * fxTWAP[ccy];
   });
+
+  const unitUSD = goldUSD + fxUSD;
 
   return {
     timestamp_utc: new Date().toISOString(),
-    unitUSD: goldUSD + fxUSD,
-    goldTWAP: goldTWAP || goldUSDPerOz,
+    goldTWAP,
     fxTWAP,
-    unitGold
+    unitGold,
+    unitUSD
   };
-}
-
-// ===== Candles =====
-function updateCandle(tfMin, price) {
-  const ts = Date.now();
-  const t = getCandleTime(ts, tfMin);
-
-  if (!candlesStore[tfMin]) candlesStore[tfMin] = [];
-
-  if (!currentCandle[tfMin] || currentCandle[tfMin].time !== t) {
-    if (currentCandle[tfMin]) {
-      candlesStore[tfMin].push(currentCandle[tfMin]);
-      if (candlesStore[tfMin].length > MAX_CANDLES) {
-        candlesStore[tfMin] = candlesStore[tfMin].slice(-MAX_CANDLES);
-      }
-    }
-
-    currentCandle[tfMin] = {
-      time: t,
-      open: price,
-      high: price,
-      low: price,
-      close: price
-    };
-  } else {
-    const c = currentCandle[tfMin];
-    c.high = Math.max(c.high, price);
-    c.low = Math.min(c.low, price);
-    c.close = price;
-  }
 }
 
 // ===== Routes =====
 app.get("/latest.json", async (req, res) => {
   try {
     const unit = await generateUnitPrice();
-
-    [1, 15, 30, 60, 180, 1440, 4320, 10080, 43200].forEach(tf =>
-      updateCandle(tf, unit.unitUSD)
-    );
-
     res.json({
       timestamp_utc: unit.timestamp_utc,
       gold_usd_per_oz_twap: unit.goldTWAP,
@@ -166,19 +135,16 @@ app.get("/latest.json", async (req, res) => {
       hundred_units_usd: unit.unitUSD * 100
     });
   } catch (e) {
-    console.error("Unit calc failed:", e);
-    res.json({
-      timestamp_utc: new Date().toISOString(),
-      gold_usd_per_oz_twap: 0,
-      fx_usd_twap: {},
-      unit_gold_grams: 0,
-      unit_usd: 0,
-      hundred_units_usd: 0
-    });
+    console.error(e);
+    res.status(500).json({ error: "compute_failed" });
   }
 });
 
-// ===== Start =====
+// ===== Root =====
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 app.listen(PORT, () =>
   console.log(`BRICS TWAP server running on port ${PORT}`)
 );
