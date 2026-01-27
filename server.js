@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const fs = require('fs');
 const fetch = require('node-fetch');
 
 const app = express();
@@ -17,57 +16,77 @@ const GOLD_WEIGHT = 0.40;
 const FX_WEIGHT = 0.12;
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 const TWAP_WINDOW_MS = 5 * 1000; // 5-second TWAP
+const UPDATE_INTERVAL_MS = 1000; // 1-second fetch interval
 
 // ===== Storage =====
-let priceHistory = [];  // Stores recent raw prices for TWAP
-let candlesStore = {};  // { timeframe_min: [ {time, open, high, low, close} ] }
+let goldHistory = [];           // { ts, price_usd_per_oz }
+let fxHistory = { };            // { BRL: [{ts,value}], ... for all 5 currencies }
+FX_LIST.forEach(ccy => fxHistory[ccy] = []);
 
 // ===== Helpers =====
-function getTWAP() {
-    if (!priceHistory.length) return null;
-    const sum = priceHistory.reduce((a,b)=>a+b.value,0);
-    return sum / priceHistory.length;
+function twap(history) {
+    if (!history.length) return null;
+    const sum = history.reduce((acc, v) => acc + v.value, 0);
+    return sum / history.length;
 }
 
-function storePrice(value) {
+function storePrice(history, value) {
     const ts = Date.now();
-    priceHistory.push({ ts, value });
-    priceHistory = priceHistory.filter(x => ts - x.ts <= TWAP_WINDOW_MS);
+    history.push({ ts, value });
+    // Keep only last TWAP_WINDOW_MS
+    return history.filter(x => ts - x.ts <= TWAP_WINDOW_MS);
 }
 
-// Convert troy oz to USD per gram
+// ===== Fetch Market Data =====
 async function getGoldUSDPerOz() {
     const res = await fetch("https://api.metals.live/v1/spot/gold");
     const data = await res.json();
-    return data[0].gold;
+    return data[0].gold; // USD per troy oz
 }
 
-// Fetch FX rates USD base
 async function getFXRates() {
     const res = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","));
     const json = await res.json();
-    return json.rates;
+    return json.rates; // USD base
 }
 
-// ===== Generate new Unit USD =====
+// ===== Compute Unit Price =====
 async function generateUnitPrice() {
-    const goldUSD = await getGoldUSDPerOz();
-    const fx = await getFXRates();
+    // 1️⃣ Get market data
+    const goldUSDPerOz = await getGoldUSDPerOz();
+    const fxRates = await getFXRates(); // USD per currency
 
-    let basketIndex = GOLD_WEIGHT;
-    for (let ccy of FX_LIST) {
-        basketIndex += FX_WEIGHT * (fx[ccy] / fx[ccy]); // simplified ratio for demo
-    }
+    // 2️⃣ Update histories (TWAP)
+    goldHistory = storePrice(goldHistory, goldUSDPerOz);
+    FX_LIST.forEach(ccy => {
+        const valueUSD = 1 / fxRates[ccy]; // 1 unit of currency in USD
+        fxHistory[ccy] = storePrice(fxHistory[ccy], valueUSD);
+    });
 
-    const unitGold = UNIT_BASE_GOLD * basketIndex;
-    const unitUSD = unitGold * (goldUSD / GOLD_G_PER_OZ);
+    // 3️⃣ Compute TWAPs
+    const goldTWAP = twap(goldHistory);
+    const fxTWAP = {};
+    FX_LIST.forEach(ccy => fxTWAP[ccy] = twap(fxHistory[ccy]));
 
-    // store TWAP
-    storePrice(unitUSD);
+    // 4️⃣ Compute Unit Gold Amount
+    const unitGold = UNIT_BASE_GOLD * (
+        GOLD_WEIGHT +
+        FX_LIST.reduce((sum, ccy) => sum + FX_WEIGHT, 0)
+    );
+
+    // 5️⃣ Compute USD per Unit
+    const goldComponentUSD = GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
+    let fxComponentUSD = 0;
+    FX_LIST.forEach(ccy => {
+        fxComponentUSD += FX_WEIGHT * unitGold * fxTWAP[ccy]; 
+    });
+
+    const unitUSD = goldComponentUSD + fxComponentUSD;
 
     return {
         timestamp_utc: new Date().toISOString(),
-        gold_usd_per_oz_twap: goldUSD,
+        gold_usd_per_oz_twap: goldTWAP,
+        fx_usd_twap: fxTWAP,             // TWAP of all 5 currencies
         unit_gold_grams: unitGold,
         unit_usd: unitUSD,
         hundred_units_usd: unitUSD * 100,
@@ -75,33 +94,18 @@ async function generateUnitPrice() {
 }
 
 // ===== Routes =====
-app.get('/latest.json', async (req,res) => {
-    const unit = await generateUnitPrice();
-    res.json(unit);
+app.get('/latest.json', async (req, res) => {
+    try {
+        const unit = await generateUnitPrice();
+        res.json(unit);
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Failed to compute Unit price");
+    }
 });
 
-app.get('/ohlc', (req,res) => {
-    const tf = parseInt(req.query.timeframe) || 1;
-    const limit = parseInt(req.query.limit) || 1000;
-    const data = candlesStore[tf] || [];
-    res.json(data.slice(-limit));
-});
-
-app.post('/ohlc/update', (req,res) => {
-    const candle = req.body;
-    if (!candle || !candle.time) return res.status(400).send("Invalid candle");
-    const tf = req.query.timeframe || 1;
-
-    if (!candlesStore[tf]) candlesStore[tf] = [];
-    candlesStore[tf].push(candle);
-
-    // Limit to 1000 candles
-    if (candlesStore[tf].length > 1000) candlesStore[tf] = candlesStore[tf].slice(-1000);
-
-    res.json({ status: "ok" });
-});
-
-// ===== Start server =====
+// ===== Start Server =====
 app.listen(PORT, () => {
     console.log(`BRICS TWAP server running on port ${PORT}`);
 });
+
