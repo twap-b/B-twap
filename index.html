@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BRICS Unit Basket v1 – True Market TWAP + Candles</title>
+<title>BRICS Unit Basket v1 – True Market 5s TWAP + Candles</title>
 <style>
 body { background:#0b0f14; color:#FFD700; font-family: Arial; padding:20px; }
 .container { max-width:900px; margin:auto; }
@@ -18,7 +18,7 @@ select { margin-top:10px; padding:5px; font-size:1em; color:#0b0f14; background:
 <body>
 
 <div class="container">
-<h1>BRICS Unit Basket v1 – Live True Market TWAP + Candles</h1>
+<h1>BRICS Unit Basket v1 – Live True Market 5s TWAP + Candles</h1>
 
 <div class="price-box">
 <div class="price">Reference Price (USD): <strong><span id="unitUsd">…</span></strong></div>
@@ -45,16 +45,17 @@ Timeframe:
 <div id="chart"></div>
 
 <div class="footnote">
-<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; 5-second TWAP for all 6 assets; chart updates every second; selectable timeframes; history persisted across reloads; last 1000 candles per timeframe in browser; frontend computes true market price using live FX + gold.
+<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; 5-second TWAP for all 6 assets computed locally; chart updates every second; selectable timeframes; history persisted across reloads; last 1000 candles per timeframe in browser.
 </div>
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-const FX_FEED_URL = "https://YOUR_SERVER_URL/fx_rates.json";   // Should return {BRL:.., RUB:.., INR:.., CNY:.., ZAR:..}
-const GOLD_FEED_URL = "https://YOUR_SERVER_URL/gold.json";     // Should return {usd_per_oz: .., timestamp_utc: ..}
+const FX_FEED_URL = "https://YOUR_SERVER_URL/fx_rates.json";
+const GOLD_FEED_URL = "https://YOUR_SERVER_URL/gold.json";
 const OHLC_URL = "https://YOUR_SERVER_URL/ohlc";
 const updateInterval = 1000;
+const TWAP_WINDOW = 5; // seconds
 const MAX_CANDLES = 1000;
 
 // ===== Chart Setup =====
@@ -71,6 +72,10 @@ const candleSeries = chart.addCandlestickSeries({ upColor: '#FFD700', downColor:
 let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
+
+// ===== Rolling price buffers for 5s TWAP =====
+let fxHistory = [];
+let goldHistory = [];
 
 // ===== Candle helpers =====
 function getCandleTime(ts, tf_min) {
@@ -89,35 +94,52 @@ async function loadHistoricalCandles() {
     } catch(e) { console.error("Failed to load historical candles", e); }
 }
 
-// ===== Compute True Market Unit USD =====
+// ===== Compute True Market Unit USD with 5s TWAP =====
 async function computeUnitUSD() {
     try {
         const [fxRes, goldRes] = await Promise.all([
             fetch(FX_FEED_URL),
             fetch(GOLD_FEED_URL)
         ]);
-        const fx = await fxRes.json();    // {BRL:.., RUB:.., INR:.., CNY:.., ZAR:..}
-        const goldData = await goldRes.json(); // {usd_per_oz: .., timestamp_utc: ..}
+        const fx = await fxRes.json();
+        const goldData = await goldRes.json();
+
+        const timestamp = new Date(goldData.timestamp_utc).getTime()/1000;
+
+        // Add to rolling history
+        fxHistory.push({...fx, ts: timestamp});
+        goldHistory.push({usd_per_oz: goldData.usd_per_oz, ts: timestamp});
+
+        // Remove old entries outside TWAP window
+        fxHistory = fxHistory.filter(p => p.ts >= timestamp - TWAP_WINDOW);
+        goldHistory = goldHistory.filter(p => p.ts >= timestamp - TWAP_WINDOW);
+
+        // Compute 5s TWAP
+        const avgGold = goldHistory.reduce((sum,p) => sum + p.usd_per_oz,0)/goldHistory.length;
+        const avgFX = {};
+        ["BRL","RUB","INR","CNY","ZAR"].forEach(c=> {
+            avgFX[c] = fxHistory.reduce((sum,p) => sum + p[c],0)/fxHistory.length;
+        });
 
         // Basket weights
         const weights = { gold: 0.40, BRL:0.12, RUB:0.12, INR:0.12, CNY:0.12, ZAR:0.12 };
 
         // Gold in grams
-        const goldGram = goldData.usd_per_oz / 31.1034768; // 1 troy oz = 31.1034768 g
+        const goldGram = avgGold / 31.1034768;
 
         // Compute weighted unit price
         let unitUSD = weights.gold * goldGram;
-        unitUSD += weights.BRL * fx.BRL;
-        unitUSD += weights.RUB * fx.RUB;
-        unitUSD += weights.INR * fx.INR;
-        unitUSD += weights.CNY * fx.CNY;
-        unitUSD += weights.ZAR * fx.ZAR;
+        unitUSD += weights.BRL * avgFX.BRL;
+        unitUSD += weights.RUB * avgFX.RUB;
+        unitUSD += weights.INR * avgFX.INR;
+        unitUSD += weights.CNY * avgFX.CNY;
+        unitUSD += weights.ZAR * avgFX.ZAR;
 
         // Update UI
         document.getElementById("unitUsd").innerText = unitUSD.toFixed(2);
         document.getElementById("unitGold").innerText = goldGram.toFixed(6);
         document.getElementById("hundredUsd").innerText = (unitUSD*100).toFixed(2);
-        document.getElementById("goldTwap").innerText = goldData.usd_per_oz.toFixed(2);
+        document.getElementById("goldTwap").innerText = avgGold.toFixed(2);
         document.getElementById("timestamp").innerText = goldData.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
         return {unitUSD, timestamp: goldData.timestamp_utc};
