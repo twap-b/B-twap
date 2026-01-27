@@ -45,13 +45,14 @@ Timeframe:
 <div id="chart"></div>
 
 <div class="footnote">
-<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; server-side 5-second TWAP on all 6 assets; chart updates every second; selectable timeframes; history persisted across reloads; last 1000 candles per timeframe in browser; server provides full historical OHLC.
+<b>Methodology:</b> Basket v1 = 40% gold, 12% each BRL/RUB/INR/CNY/ZAR; gold in troy oz; 5-second TWAP for all 6 assets; chart updates every second; selectable timeframes; history persisted across reloads; last 1000 candles per timeframe in browser; frontend computes true market price using live FX + gold.
 </div>
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-const FEED_URL = "https://YOUR_SERVER_URL/latest.json";
+const FX_FEED_URL = "https://YOUR_SERVER_URL/fx_rates.json";   // Should return {BRL:.., RUB:.., INR:.., CNY:.., ZAR:..}
+const GOLD_FEED_URL = "https://YOUR_SERVER_URL/gold.json";     // Should return {usd_per_oz: .., timestamp_utc: ..}
 const OHLC_URL = "https://YOUR_SERVER_URL/ohlc";
 const updateInterval = 1000;
 const MAX_CANDLES = 1000;
@@ -88,45 +89,70 @@ async function loadHistoricalCandles() {
     } catch(e) { console.error("Failed to load historical candles", e); }
 }
 
-// ===== Update True Market TWAP =====
-async function updateTWAP() {
+// ===== Compute True Market Unit USD =====
+async function computeUnitUSD() {
     try {
-        const res = await fetch(FEED_URL);
-        const d = await res.json();
-        const tsUnix = new Date(d.timestamp_utc).getTime()/1000;
+        const [fxRes, goldRes] = await Promise.all([
+            fetch(FX_FEED_URL),
+            fetch(GOLD_FEED_URL)
+        ]);
+        const fx = await fxRes.json();    // {BRL:.., RUB:.., INR:.., CNY:.., ZAR:..}
+        const goldData = await goldRes.json(); // {usd_per_oz: .., timestamp_utc: ..}
+
+        // Basket weights
+        const weights = { gold: 0.40, BRL:0.12, RUB:0.12, INR:0.12, CNY:0.12, ZAR:0.12 };
+
+        // Gold in grams
+        const goldGram = goldData.usd_per_oz / 31.1034768; // 1 troy oz = 31.1034768 g
+
+        // Compute weighted unit price
+        let unitUSD = weights.gold * goldGram;
+        unitUSD += weights.BRL * fx.BRL;
+        unitUSD += weights.RUB * fx.RUB;
+        unitUSD += weights.INR * fx.INR;
+        unitUSD += weights.CNY * fx.CNY;
+        unitUSD += weights.ZAR * fx.ZAR;
 
         // Update UI
-        document.getElementById("unitUsd").innerText = d.unit_usd.toFixed(2);
-        document.getElementById("unitGold").innerText = d.unit_gold_grams.toFixed(6);
-        document.getElementById("hundredUsd").innerText = (d.hundred_units_usd).toFixed(2);
-        document.getElementById("goldTwap").innerText = d.gold_usd_per_oz_twap.toFixed(2);
-        document.getElementById("timestamp").innerText = d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+        document.getElementById("unitUsd").innerText = unitUSD.toFixed(2);
+        document.getElementById("unitGold").innerText = goldGram.toFixed(6);
+        document.getElementById("hundredUsd").innerText = (unitUSD*100).toFixed(2);
+        document.getElementById("goldTwap").innerText = goldData.usd_per_oz.toFixed(2);
+        document.getElementById("timestamp").innerText = goldData.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-        // ===== Candlestick logic =====
-        const candleTime = getCandleTime(tsUnix, timeframeMin);
-        if(!currentCandle || currentCandle.time !== candleTime){
-            if(currentCandle) candles.push(currentCandle);
-            currentCandle = { time: candleTime, open: d.unit_usd, high: d.unit_usd, low: d.unit_usd, close: d.unit_usd };
-            if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
-            candleSeries.setData(candles.concat([currentCandle]));
+        return {unitUSD, timestamp: goldData.timestamp_utc};
 
-            // Send to server
-            fetch(`${OHLC_URL}/update`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(currentCandle)
-            });
+    } catch(e) { console.error("Failed to compute Unit USD", e); return null; }
+}
 
-            // Save locally
-            localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
-        } else {
-            currentCandle.high = Math.max(currentCandle.high, d.unit_usd);
-            currentCandle.low = Math.min(currentCandle.low, d.unit_usd);
-            currentCandle.close = d.unit_usd;
-            candleSeries.update(currentCandle);
-        }
+// ===== Update Candles =====
+async function updateCandles() {
+    const data = await computeUnitUSD();
+    if(!data) return;
 
-    } catch(e) { console.error("Feed fetch error", e); }
+    const tsUnix = new Date(data.timestamp).getTime()/1000;
+    const candleTime = getCandleTime(tsUnix, timeframeMin);
+
+    if(!currentCandle || currentCandle.time !== candleTime){
+        if(currentCandle) candles.push(currentCandle);
+        currentCandle = { time: candleTime, open: data.unitUSD, high: data.unitUSD, low: data.unitUSD, close: data.unitUSD };
+        if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
+        candleSeries.setData(candles.concat([currentCandle]));
+
+        // Persist to server
+        fetch(`${OHLC_URL}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentCandle)
+        });
+
+        localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
+    } else {
+        currentCandle.high = Math.max(currentCandle.high, data.unitUSD);
+        currentCandle.low = Math.min(currentCandle.low, data.unitUSD);
+        currentCandle.close = data.unitUSD;
+        candleSeries.update(currentCandle);
+    }
 }
 
 // ===== Initial Load =====
@@ -137,12 +163,11 @@ async function init() {
     candleSeries.setData(candles);
 
     await loadHistoricalCandles();
-
-    updateTWAP();
-    setInterval(updateTWAP, updateInterval);
+    updateCandles();
+    setInterval(updateCandles, updateInterval);
 }
 
-// ===== Timeframe change =====
+// ===== Handle timeframe change =====
 document.getElementById('timeframe').addEventListener('change', ()=>{
     timeframeMin = parseInt(document.getElementById('timeframe').value);
     init();
