@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BRICS Unit Basket v1 – TWAP + Persistent Candles</title>
+<title>BRICS Unit Basket v1 – TWAP + Candles</title>
 <style>
 body { background:#0b0f14; color:#eaeaea; font-family: Arial, sans-serif; padding:20px; }
 .container { max-width:900px; margin:auto; }
@@ -12,6 +12,8 @@ h1 { text-align:center; color:#ffd700; }
 .row { margin:5px 0; font-size:1.1em; }
 #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
 select { margin-top:10px; padding:5px; font-size:1em; }
+.fx-box { display:flex; flex-wrap:wrap; justify-content:space-around; background:#151a21; padding:10px; border-radius:8px; margin-top:10px; }
+.fx-box .fx { flex:1; margin:5px; text-align:center; background:#1a1f26; padding:10px; border-radius:5px; }
 .footnote { font-size:0.85em; color:#aaa; margin-top:20px; line-height:1.4; }
 </style>
 </head>
@@ -42,6 +44,10 @@ Timeframe:
 </div>
 </div>
 
+<div class="fx-box" id="fxContainer">
+  <!-- FX shares will be inserted dynamically -->
+</div>
+
 <div id="chart"></div>
 
 <div class="footnote">
@@ -54,14 +60,15 @@ Timeframe:
 const SERVER_URL = "https://b-twap.onrender.com";
 const FEED_URL = SERVER_URL + "/latest.json";
 const OHLC_URL = SERVER_URL + "/ohlc";
-const UPDATE_INTERVAL = 1000;
+const updateInterval = 1000;
 const MAX_CANDLES = 1000;
+const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 
 const chartContainer = document.getElementById('chart');
 const chart = LightweightCharts.createChart(chartContainer, {
     layout: { backgroundColor: '#0b0f14', textColor: '#eaeaea' },
     grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
-    rightPriceScale: { borderColor:'#555', autoScale: true },
+    rightPriceScale: { borderColor:'#555', autoScale:true },
     timeScale: { borderColor:'#555', timeVisible:true, secondsVisible:true }
 });
 const candleSeries = chart.addCandlestickSeries({ upColor: '#ffd700', downColor: '#ff4b4b', borderVisible:false, wickColor: '#eee' });
@@ -70,12 +77,27 @@ let timeframeMin = parseInt(document.getElementById('timeframe').value);
 let candles = [];
 let currentCandle = null;
 
-// Round timestamp down to nearest timeframe (in seconds)
-function getCandleTime(ts, tf_min){
-    return Math.floor(ts / (tf_min * 60)) * (tf_min * 60);
+const fxContainer = document.getElementById('fxContainer');
+
+// initialize FX boxes
+function initFXBoxes() {
+    fxContainer.innerHTML = '';
+    FX_LIST.forEach(ccy=>{
+        const div = document.createElement('div');
+        div.className = 'fx';
+        div.id = 'fx_' + ccy;
+        div.innerHTML = `<strong>${ccy}</strong><br><span>…</span>`;
+        fxContainer.appendChild(div);
+    });
+}
+initFXBoxes();
+
+function getCandleTime(ts, tf_min) {
+    return Math.floor(ts / (tf_min * 60));
 }
 
-async function loadHistoricalCandles(){
+// Load historical candles
+async function loadHistoricalCandles() {
     try {
         const res = await fetch(`${OHLC_URL}?timeframe=${timeframeMin}&limit=${MAX_CANDLES}`);
         const data = await res.json();
@@ -89,11 +111,12 @@ async function loadHistoricalCandles(){
         if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
         currentCandle = candles.length ? {...candles[candles.length-1]} : null;
         candleSeries.setData(candles);
-    } catch(e){ console.error("Failed to load historical candles", e); }
+    } catch(e){ console.error("Failed to load historical candles", e);}
 }
 
-async function updateTWAP(){
-    try{
+// Update TWAP and FX contributions
+async function updateTWAP() {
+    try {
         const res = await fetch(FEED_URL);
         const d = await res.json();
         const tsUnix = Math.floor(new Date(d.timestamp_utc).getTime()/1000);
@@ -104,12 +127,23 @@ async function updateTWAP(){
         document.getElementById("goldTwap").innerText = d.gold_usd_per_oz_twap.toFixed(2);
         document.getElementById("timestamp").innerText = d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
+        // FX contributions (USD per unit)
+        if(d.fx_usd_twap) {
+            FX_LIST.forEach(ccy=>{
+                const div = document.getElementById('fx_' + ccy);
+                const value = d.fx_usd_twap[ccy];
+                div.querySelector('span').innerText = value.toFixed(4);
+            });
+        }
+
+        // Candle update
         const candleTime = getCandleTime(tsUnix, timeframeMin);
         if(!currentCandle || currentCandle.time !== candleTime){
             if(currentCandle) candles.push(currentCandle);
             currentCandle = { time: candleTime, open: d.unit_usd, high: d.unit_usd, low: d.unit_usd, close: d.unit_usd };
             if(candles.length > MAX_CANDLES) candles = candles.slice(-MAX_CANDLES);
             candleSeries.setData(candles.concat([currentCandle]));
+            localStorage.setItem("candles_" + timeframeMin, JSON.stringify(candles));
         } else {
             currentCandle.high = Math.max(currentCandle.high, d.unit_usd);
             currentCandle.low = Math.min(currentCandle.low, d.unit_usd);
@@ -117,13 +151,15 @@ async function updateTWAP(){
             candleSeries.update(currentCandle);
         }
 
-        // Auto-scale Y-axis on each update
-        chart.priceScale().applyOptions({ autoScale: true });
+        // Auto-scale Y-axis based on latest candle
+        chart.priceScale('right').applyOptions({ autoScale: true });
 
     } catch(e){ console.error("Feed fetch error", e);}
 }
 
-async function init(){
+// Init
+async function init() {
+    // load candles from localStorage first
     candles = (JSON.parse(localStorage.getItem("candles_" + timeframeMin)) || []).map(c => ({
         time: Math.floor(c.time),
         open: c.open,
@@ -136,8 +172,8 @@ async function init(){
     candleSeries.setData(candles);
 
     await loadHistoricalCandles();
-    updateTWAP();
-    setInterval(updateTWAP, UPDATE_INTERVAL);
+    await updateTWAP();
+    setInterval(updateTWAP, updateInterval);
 }
 
 init();
