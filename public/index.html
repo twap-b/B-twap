@@ -13,8 +13,21 @@
     .row { margin:5px 0; font-size:1.1em; color:#ffd700; }
     #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
     select { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#ffd700; border:1px solid #333; }
-    .fx-row { display:flex; justify-content:space-between; background:#1a1f28; padding:5px 10px; border-radius:4px; margin:2px 0; color:#ffd700; }
-    .fx-row span { font-weight:bold; }
+
+    .fx-row {
+      display:flex;
+      justify-content:space-between;
+      background:#1a1f28;
+      padding:6px 10px;
+      border-radius:4px;
+      margin:3px 0;
+      color:#ffd700;
+      font-size:0.95em;
+    }
+
+    .fx-left { font-weight:bold; }
+    .fx-right { text-align:right; }
+
     .footnote { font-size:.85em; color:#aaa; margin-top:20px; line-height:1.4; }
   </style>
 </head>
@@ -51,8 +64,8 @@
 <div id="chart"></div>
 
 <div class="footnote">
-<b>Methodology:</b> 40% gold, 12% each BRL/RUB/INR/CNY/ZAR.  
-All FX legs float live vs USD. Server-side 5s TWAP.
+<b>Methodology:</b> 40% gold, 12% each BRL/RUB/INR/CNY/ZAR.<br>
+Each FX leg displays its USD weight contribution and the equivalent local currency amount.
 </div>
 </div>
 
@@ -61,62 +74,91 @@ All FX legs float live vs USD. Server-side 5s TWAP.
 <script>
 const FEED_URL = "/latest.json";
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
+const FX_WEIGHT = 0.12;
+
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
   layout:{ background:{color:"#0b0f14"}, textColor:"#ffd700" },
   grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
   timeScale:{ timeVisible:true, secondsVisible:true }
 });
-const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-  upColor:"#ffd700", downColor:"#ff4b4b",
-  wickUpColor:"#ffd700", wickDownColor:"#ff4b4b",
-  borderVisible:false
-});
 
+const candleSeries = chart.addSeries(
+  LightweightCharts.CandlestickSeries,
+  {
+    upColor:"#ffd700",
+    downColor:"#ff4b4b",
+    wickUpColor:"#ffd700",
+    wickDownColor:"#ff4b4b",
+    borderVisible:false
+  }
+);
+
+// ---- FX rows ----
 const fxContainer = document.getElementById("fxContainer");
+
 FX_LIST.forEach(ccy=>{
-  const d=document.createElement("div");
-  d.className="fx-row"; d.id="fx_"+ccy;
-  d.innerHTML=`<span>${ccy}</span><span>…</span>`;
+  const d = document.createElement("div");
+  d.className = "fx-row";
+  d.id = "fx_" + ccy;
+  d.innerHTML = `
+    <div class="fx-left">${ccy}</div>
+    <div class="fx-right">…</div>
+  `;
   fxContainer.appendChild(d);
 });
 
+// ---- Candles ----
 function candleTime(ts,tf){ return Math.floor(ts/(tf*60)); }
 let candles=[], current=null;
 let tf=parseInt(document.getElementById("timeframe").value);
 
 async function tick(){
   try {
-    const d=await (await fetch(FEED_URL)).json();
-    document.getElementById("unitUsd").textContent=d.unit_usd.toFixed(2);
-    document.getElementById("unitGold").textContent=d.unit_gold_grams.toFixed(6);
-    document.getElementById("hundredUsd").textContent=d.hundred_units_usd.toFixed(2);
-    document.getElementById("goldTwap").textContent=d.gold_usd_per_oz_twap.toFixed(2);
-    document.getElementById("timestamp").textContent=d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+    const d = await (await fetch(FEED_URL)).json();
 
-    FX_LIST.forEach(c=>{
-      document.querySelector(`#fx_${c} span:last-child`)
-        .textContent=(1/d.fx_usd_twap[c]).toFixed(2);
+    const unitUSD = d.unit_usd;
+
+    document.getElementById("unitUsd").textContent = unitUSD.toFixed(2);
+    document.getElementById("unitGold").textContent = d.unit_gold_grams.toFixed(6);
+    document.getElementById("hundredUsd").textContent = d.hundred_units_usd.toFixed(2);
+    document.getElementById("goldTwap").textContent = d.gold_usd_per_oz_twap.toFixed(2);
+    document.getElementById("timestamp").textContent =
+      d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+
+    // ---- FX basket math (corrected) ----
+    FX_LIST.forEach(ccy=>{
+      const usdShare = unitUSD * FX_WEIGHT;               // 12% USD slice
+      const fxRate   = d.fx_usd_twap[ccy];                // USD → FX
+      const fxAmount = usdShare * fxRate;                 // local currency in basket
+
+      document.querySelector(`#fx_${ccy} .fx-right`).innerHTML =
+        `$${usdShare.toFixed(2)} &nbsp; | &nbsp; ${fxAmount.toFixed(2)} ${ccy}`;
     });
 
-    const t=candleTime(Date.now()/1000,tf);
-    if(!current||current.time!==t){
+    const t = candleTime(Date.now()/1000, tf);
+    if(!current || current.time !== t){
       if(current) candles.push(current);
-      current={time:t,open:d.unit_usd,high:d.unit_usd,low:d.unit_usd,close:d.unit_usd};
+      current = { time:t, open:unitUSD, high:unitUSD, low:unitUSD, close:unitUSD };
       candleSeries.setData(candles.concat([current]));
     } else {
-      current.high=Math.max(current.high,d.unit_usd);
-      current.low=Math.min(current.low,d.unit_usd);
-      current.close=d.unit_usd;
+      current.high = Math.max(current.high, unitUSD);
+      current.low  = Math.min(current.low, unitUSD);
+      current.close = unitUSD;
       candleSeries.update(current);
     }
-  } catch(e){ console.error("Tick error:", e); }
+
+  } catch(e){
+    console.error("Tick error:", e);
+  }
 }
 
 tick();
-setInterval(tick,1000);
+setInterval(tick, 1000);
 
-document.getElementById("timeframe").onchange=e=>{
-  tf=parseInt(e.target.value); candles=[]; current=null;
+document.getElementById("timeframe").onchange = e => {
+  tf = parseInt(e.target.value);
+  candles = [];
+  current = null;
 };
 </script>
 </body>
