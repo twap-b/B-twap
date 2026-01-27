@@ -14,6 +14,7 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+// ===== Constants =====
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD = 0.9823;
 const GOLD_WEIGHT = 0.40;
@@ -22,6 +23,7 @@ const FX_LIST = ["BRL", "RUB", "INR", "CNY", "ZAR"];
 const TWAP_WINDOW_MS = 5000;
 const MAX_CANDLES = 1000;
 
+// ===== Storage =====
 let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(ccy => (fxHistory[ccy] = []));
@@ -29,6 +31,7 @@ FX_LIST.forEach(ccy => (fxHistory[ccy] = []));
 let candlesStore = {};
 let currentCandle = {};
 
+// ===== Helpers =====
 function twap(history) {
   if (!history.length) return null;
   return history.reduce((a, b) => a + b.value, 0) / history.length;
@@ -44,29 +47,40 @@ function getCandleTime(ts, tfMin) {
   return Math.floor(ts / (tfMin * 60 * 1000)) * tfMin * 60;
 }
 
-// Fallback safe fetch
-async function getGoldUSDPerOz() {
+// ===== SAFE FETCH with timeout =====
+async function safeFetchJSON(url, fallback) {
   try {
-    const res = await fetch("https://api.metals.live/v1/spot/gold");
-    const data = await res.json();
-    return data[0].gold;
-  } catch {
-    return 1900 + Math.random() * 5;
-  }
-}
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 4000);
 
-async function getFXRates() {
-  try {
-    const res = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","));
-    const json = await res.json();
-    return json.rates;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error("Bad response");
+
+    return await res.json();
   } catch {
-    const fallback = {};
-    FX_LIST.forEach(ccy => (fallback[ccy] = 1));
     return fallback;
   }
 }
 
+// ===== Market Data =====
+async function getGoldUSDPerOz() {
+  const data = await safeFetchJSON(
+    "https://api.metals.live/v1/spot/gold",
+    [{ gold: 1900 }]
+  );
+  return data[0].gold;
+}
+
+async function getFXRates() {
+  const data = await safeFetchJSON(
+    "https://api.exchangerate.host/latest?base=USD&symbols=" +
+      FX_LIST.join(","),
+    { rates: { BRL:5, RUB:90, INR:83, CNY:7.2, ZAR:18 } }
+  );
+  return data.rates;
+}
+
+// ===== Compute Unit =====
 async function generateUnitPrice() {
   const goldUSDPerOz = await getGoldUSDPerOz();
   const fxRates = await getFXRates();
@@ -74,43 +88,52 @@ async function generateUnitPrice() {
   goldHistory = storePrice(goldHistory, goldUSDPerOz);
 
   FX_LIST.forEach(ccy => {
-    const valueUSD = 1 / fxRates[ccy];
-    fxHistory[ccy] = storePrice(fxHistory[ccy], valueUSD);
+    const v = 1 / fxRates[ccy];
+    fxHistory[ccy] = storePrice(fxHistory[ccy], v);
   });
 
   const goldTWAP = twap(goldHistory);
   const fxTWAP = {};
   FX_LIST.forEach(ccy => (fxTWAP[ccy] = twap(fxHistory[ccy])));
 
-  const unitGold = UNIT_BASE_GOLD * (GOLD_WEIGHT + FX_LIST.reduce((s, _) => s + FX_WEIGHT, 0));
+  const unitGold =
+    UNIT_BASE_GOLD *
+    (GOLD_WEIGHT + FX_LIST.length * FX_WEIGHT);
+
   const goldUSD = GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
 
   let fxUSD = 0;
-  FX_LIST.forEach(ccy => { fxUSD += FX_WEIGHT * unitGold * fxTWAP[ccy]; });
-
-  const unitUSD = goldUSD + fxUSD;
+  FX_LIST.forEach(ccy => {
+    fxUSD += FX_WEIGHT * unitGold * fxTWAP[ccy];
+  });
 
   return {
     timestamp_utc: new Date().toISOString(),
-    unitUSD,
+    unitUSD: goldUSD + fxUSD,
     goldTWAP,
     fxTWAP,
     unitGold
   };
 }
 
+// ===== Candles =====
 function updateCandle(tfMin, price) {
   const ts = Date.now();
-  const candleTime = getCandleTime(ts, tfMin);
+  const t = getCandleTime(ts, tfMin);
+
   if (!candlesStore[tfMin]) candlesStore[tfMin] = [];
 
-  if (!currentCandle[tfMin] || currentCandle[tfMin].time !== candleTime) {
-    if (currentCandle[tfMin]) {
+  if (!currentCandle[tfMin] || currentCandle[tfMin].time !== t) {
+    if (currentCandle[tfMin])
       candlesStore[tfMin].push(currentCandle[tfMin]);
-      if (candlesStore[tfMin].length > MAX_CANDLES)
-        candlesStore[tfMin] = candlesStore[tfMin].slice(-MAX_CANDLES);
-    }
-    currentCandle[tfMin] = { time: candleTime, open: price, high: price, low: price, close: price };
+
+    currentCandle[tfMin] = {
+      time: t,
+      open: price,
+      high: price,
+      low: price,
+      close: price
+    };
   } else {
     const c = currentCandle[tfMin];
     c.high = Math.max(c.high, price);
@@ -119,26 +142,40 @@ function updateCandle(tfMin, price) {
   }
 }
 
+// ===== Routes =====
 app.get("/latest.json", async (req, res) => {
-  const unit = await generateUnitPrice();
-  [1,15,30,60,180,1440,4320,10080,43200].forEach(tf => updateCandle(tf, unit.unitUSD));
-  res.json({
-    timestamp_utc: unit.timestamp_utc,
-    gold_usd_per_oz_twap: unit.goldTWAP,
-    fx_usd_twap: unit.fxTWAP,
-    unit_gold_grams: unit.unitGold,
-    unit_usd: unit.unitUSD,
-    hundred_units_usd: unit.unitUSD*100
-  });
+  try {
+    const unit = await generateUnitPrice();
+    [1,15,30,60,180,1440,4320,10080,43200].forEach(tf =>
+      updateCandle(tf, unit.unitUSD)
+    );
+
+    res.json({
+      timestamp_utc: unit.timestamp_utc,
+      gold_usd_per_oz_twap: unit.goldTWAP,
+      fx_usd_twap: unit.fxTWAP,
+      unit_gold_grams: unit.unitGold,
+      unit_usd: unit.unitUSD,
+      hundred_units_usd: unit.unitUSD * 100
+    });
+  } catch {
+    res.json({
+      error: "fallback",
+      unit_usd: 0,
+      hundred_units_usd: 0
+    });
+  }
 });
 
 app.get("/ohlc", (req, res) => {
   const tf = parseInt(req.query.timeframe) || 1;
-  const limit = parseInt(req.query.limit) || MAX_CANDLES;
-  res.json((candlesStore[tf] || []).slice(-limit));
+  res.json(candlesStore[tf] || []);
 });
 
-// Root fallback
-app.get("/", (req, res) => res.sendFile(path.join(__dirname,"public","index.html")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
-app.listen(PORT, () => console.log(`BRICS TWAP server running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log("BRICS TWAP server running on", PORT)
+);
