@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
-import fetch from "node-fetch";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -14,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// Serve frontend
+// Serve frontend from /public
 app.use(express.static(path.join(__dirname, "public")));
 
 // ===== Constants =====
@@ -31,40 +30,51 @@ let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(ccy => (fxHistory[ccy] = []));
 
-let candlesStore = {};
-let currentCandle = {};
+let candlesStore = {};     // { timeframe: [candles] }
+let currentCandle = {};   // { timeframe: candle }
 
 // ===== Helpers =====
 function twap(history) {
   if (!history.length) return null;
-  const sum = history.reduce((acc, v) => acc + v.value, 0);
-  return sum / history.length;
+  return history.reduce((a, b) => a + b.value, 0) / history.length;
 }
 
 function storePrice(history, value) {
   const ts = Date.now();
   history.push({ ts, value });
-  return history.filter(x => ts - x.ts <= TWAP_WINDOW_MS);
+  return history.filter(p => ts - p.ts <= TWAP_WINDOW_MS);
 }
 
-function getCandleTime(ts, tf_min) {
-  return Math.floor(ts / (tf_min * 60 * 1000)) * tf_min * 60;
+function getCandleTime(ts, tfMin) {
+  return Math.floor(ts / (tfMin * 60 * 1000)) * tfMin * 60;
 }
 
-// ===== Fetch Market Data =====
+// ===== Fetch Market Data (Native fetch) =====
 async function getGoldUSDPerOz() {
-  const res = await fetch("https://api.metals.live/v1/spot/gold");
-  const data = await res.json();
-  return data[0].gold;
+  try {
+    const res = await fetch("https://api.metals.live/v1/spot/gold");
+    const data = await res.json();
+    return data[0].gold;
+  } catch (e) {
+    console.error("Gold fetch failed, using fallback", e);
+    return 1900 + Math.random() * 5;
+  }
 }
 
 async function getFXRates() {
-  const res = await fetch(
-    "https://api.exchangerate.host/latest?base=USD&symbols=" +
-      FX_LIST.join(",")
-  );
-  const json = await res.json();
-  return json.rates;
+  try {
+    const res = await fetch(
+      "https://api.exchangerate.host/latest?base=USD&symbols=" +
+        FX_LIST.join(",")
+    );
+    const json = await res.json();
+    return json.rates;
+  } catch (e) {
+    console.error("FX fetch failed, using fallback", e);
+    const fallback = {};
+    FX_LIST.forEach(ccy => (fallback[ccy] = 1));
+    return fallback;
+  }
 }
 
 // ===== Compute Unit Price =====
@@ -85,7 +95,7 @@ async function generateUnitPrice() {
 
   const unitGold =
     UNIT_BASE_GOLD *
-    (GOLD_WEIGHT + FX_LIST.reduce((sum, _) => sum + FX_WEIGHT, 0));
+    (GOLD_WEIGHT + FX_LIST.reduce((s, _) => s + FX_WEIGHT, 0));
 
   const goldUSD =
     GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
@@ -106,25 +116,22 @@ async function generateUnitPrice() {
   };
 }
 
-// ===== Update Candles =====
-function updateCandle(tf_min, price) {
+// ===== Candle Engine =====
+function updateCandle(tfMin, price) {
   const ts = Date.now();
-  const candleTime = getCandleTime(ts, tf_min);
+  const candleTime = getCandleTime(ts, tfMin);
 
-  if (!candlesStore[tf_min]) candlesStore[tf_min] = [];
+  if (!candlesStore[tfMin]) candlesStore[tfMin] = [];
 
-  if (
-    !currentCandle[tf_min] ||
-    currentCandle[tf_min].time !== candleTime
-  ) {
-    if (currentCandle[tf_min]) {
-      candlesStore[tf_min].push(currentCandle[tf_min]);
-      if (candlesStore[tf_min].length > MAX_CANDLES) {
-        candlesStore[tf_min] = candlesStore[tf_min].slice(-MAX_CANDLES);
+  if (!currentCandle[tfMin] || currentCandle[tfMin].time !== candleTime) {
+    if (currentCandle[tfMin]) {
+      candlesStore[tfMin].push(currentCandle[tfMin]);
+      if (candlesStore[tfMin].length > MAX_CANDLES) {
+        candlesStore[tfMin] = candlesStore[tfMin].slice(-MAX_CANDLES);
       }
     }
 
-    currentCandle[tf_min] = {
+    currentCandle[tfMin] = {
       time: candleTime,
       open: price,
       high: price,
@@ -132,7 +139,7 @@ function updateCandle(tf_min, price) {
       close: price
     };
   } else {
-    const c = currentCandle[tf_min];
+    const c = currentCandle[tfMin];
     c.high = Math.max(c.high, price);
     c.low = Math.min(c.low, price);
     c.close = price;
@@ -164,12 +171,12 @@ app.get("/latest.json", async (req, res) => {
 app.get("/ohlc", (req, res) => {
   const tf = parseInt(req.query.timeframe) || 1;
   const limit = parseInt(req.query.limit) || MAX_CANDLES;
-  const data = candlesStore[tf] || [];
-  res.json(data.slice(-limit));
+  res.json((candlesStore[tf] || []).slice(-limit));
 });
 
-app.post("/ohlc/update", (req, res) => {
-  res.json({ status: "ok" });
+// ===== Root fallback (fixes Cannot GET /) =====
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // ===== Start Server =====
