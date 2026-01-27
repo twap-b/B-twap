@@ -23,8 +23,8 @@ let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(ccy => fxHistory[ccy] = []);
 
-let candlesStore = {}; // { timeframe_min: [ {time, open, high, low, close} ] }
-let currentCandle = {}; // { timeframe_min: candle }
+let candlesStore = {};   // { timeframe_min: [ {time, open, high, low, close} ] }
+let currentCandle = {};  // { timeframe_min: candle }
 
 // ===== Helpers =====
 function twap(history) {
@@ -46,15 +46,27 @@ function getCandleTime(ts, tf_min) {
 
 // ===== Fetch Market Data =====
 async function getGoldUSDPerOz() {
-    const res = await fetch("https://api.metals.live/v1/spot/gold");
-    const data = await res.json();
-    return data[0].gold;
+    try {
+        const res = await fetch("https://api.metals.live/v1/spot/gold");
+        const data = await res.json();
+        return data[0].gold;
+    } catch(e) {
+        console.error("Failed to fetch gold price:", e);
+        return 1900 + Math.random()*5; // fallback
+    }
 }
 
 async function getFXRates() {
-    const res = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","));
-    const json = await res.json();
-    return json.rates;
+    try {
+        const res = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","));
+        const json = await res.json();
+        return json.rates;
+    } catch(e) {
+        console.error("Failed to fetch FX rates:", e);
+        const fallback = {};
+        FX_LIST.forEach(ccy => fallback[ccy] = 1);
+        return fallback;
+    }
 }
 
 // ===== Compute True-Market Unit Price =====
@@ -83,7 +95,13 @@ async function generateUnitPrice() {
 
     const unitUSD = goldUSD + fxUSD;
 
-    return { timestamp_utc: new Date().toISOString(), unitUSD, goldTWAP, fxTWAP, unitGold };
+    return { 
+        timestamp_utc: new Date().toISOString(),
+        unitUSD, 
+        goldTWAP, 
+        fxTWAP, 
+        unitGold 
+    };
 }
 
 // ===== OHLC Candle Update =====
@@ -95,7 +113,8 @@ function updateCandle(tf_min, price) {
     if (!currentCandle[tf_min] || currentCandle[tf_min].time !== candleTime) {
         if (currentCandle[tf_min]) {
             candlesStore[tf_min].push(currentCandle[tf_min]);
-            if (candlesStore[tf_min].length > MAX_CANDLES) candlesStore[tf_min] = candlesStore[tf_min].slice(-MAX_CANDLES);
+            if (candlesStore[tf_min].length > MAX_CANDLES)
+                candlesStore[tf_min] = candlesStore[tf_min].slice(-MAX_CANDLES);
         }
         currentCandle[tf_min] = { time: candleTime, open: price, high: price, low: price, close: price };
     } else {
@@ -112,7 +131,7 @@ app.get('/latest.json', async (req, res) => {
         const unit = await generateUnitPrice();
 
         // Update all candle timeframes with latest price
-        const tfList = [1,15,30,60,180,1440,4320,10080,43200]; // in minutes
+        const tfList = [1,15,30,60,180,1440,4320,10080,43200]; // minutes
         tfList.forEach(tf => updateCandle(tf, unit.unitUSD));
 
         res.json({
@@ -137,7 +156,7 @@ app.get('/ohlc', (req,res) => {
 });
 
 app.post('/ohlc/update', (req,res) => {
-    // Optional: external POST updates (we already update internally)
+    // Optional external updates; not used internally
     res.json({status:"ok"});
 });
 
