@@ -4,7 +4,7 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import path from "path";
 import { fileURLToPath } from "url";
-import fetch from "node-fetch"; // ensure fetch works in Node <18
+import fetch from "node-fetch";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,7 +16,7 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-// ===== Constants =====
+// ===== Constants (frozen) =====
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD = 0.9823;
 const GOLD_WEIGHT = 0.40;
@@ -27,105 +27,95 @@ const TWAP_WINDOW_MS = 5000;
 // ===== Storage =====
 let goldHistory = [];
 let fxHistory = {};
-FX_LIST.forEach(ccy => (fxHistory[ccy] = []));
+FX_LIST.forEach(c => fxHistory[c] = []);
 
 // ===== Helpers =====
 function twap(history) {
-  if (!history || !history.length) return 0;
-  return history.reduce((sum, p) => sum + (p.value || 0), 0) / history.length;
+  if (!history.length) return 0;
+  return history.reduce((a,b)=>a+b.value,0) / history.length;
 }
 
-function storePrice(history, value) {
-  const ts = Date.now();
-  history.push({ ts, value });
-  return history.filter(p => ts - p.ts <= TWAP_WINDOW_MS);
+function store(history, value) {
+  const now = Date.now();
+  history.push({ ts: now, value });
+  return history.filter(p => now - p.ts <= TWAP_WINDOW_MS);
 }
 
-// ===== SAFE FETCH with timeout =====
 async function safeFetchJSON(url, fallback) {
   try {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 4000);
-
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`Bad response: ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    console.warn("Fetch failed:", url, err.message);
+    const r = await fetch(url, { signal: controller.signal });
+    if (!r.ok) throw new Error();
+    return await r.json();
+  } catch {
     return fallback;
   }
 }
 
 // ===== Market Data =====
 async function getGoldUSDPerOz() {
-  const data = await safeFetchJSON(
+  const d = await safeFetchJSON(
     "https://api.metals.live/v1/spot/gold",
-    [{ gold: 1900 }] // fallback
+    [{ gold: 1900 }]
   );
-  return data?.[0]?.gold || 1900;
+  return d[0].gold;
 }
 
 async function getFXRates() {
-  const data = await safeFetchJSON(
+  const d = await safeFetchJSON(
     "https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","),
-    { rates: { BRL: 5, RUB: 90, INR: 83, CNY: 7.2, ZAR: 18 } } // fallback
+    { rates: { BRL:5, RUB:90, INR:83, CNY:7.2, ZAR:18 } }
   );
-  return data?.rates || { BRL: 5, RUB: 90, INR: 83, CNY: 7.2, ZAR: 18 };
+  return d.rates;
 }
 
-// ===== Compute Unit =====
+// ===== Core Calculation =====
 async function generateUnitPrice() {
-  const goldUSDPerOz = await getGoldUSDPerOz();
-  const fxRates = await getFXRates();
+  const gold = await getGoldUSDPerOz();
+  const fx = await getFXRates();
 
-  goldHistory = storePrice(goldHistory, goldUSDPerOz);
+  goldHistory = store(goldHistory, gold);
+  const goldTWAP = twap(goldHistory);
 
   const fxTWAP = {};
-  FX_LIST.forEach(ccy => {
-    const rate = fxRates[ccy] || 1;
-    const inverted = 1 / rate;
-    fxHistory[ccy] = storePrice(fxHistory[ccy] || [], inverted);
-    fxTWAP[ccy] = twap(fxHistory[ccy]);
+  FX_LIST.forEach(c => {
+    fxHistory[c] = store(fxHistory[c], fx[c]);
+    fxTWAP[c] = twap(fxHistory[c]);
   });
 
-  const goldTWAP = twap(goldHistory);
-  const unitGold = UNIT_BASE_GOLD * (GOLD_WEIGHT + FX_LIST.length * FX_WEIGHT);
-  const goldUSD = GOLD_WEIGHT * unitGold * (goldTWAP / GOLD_G_PER_OZ);
+  // ---- White paper compliant pricing ----
+  const unitGold = UNIT_BASE_GOLD;
 
-  let fxUSD = 0;
-  FX_LIST.forEach(ccy => {
-    fxUSD += FX_WEIGHT * unitGold * (fxTWAP[ccy] || 0);
-  });
+  const unitUSD =
+    unitGold * (goldTWAP / GOLD_G_PER_OZ);
 
-  const unitUSD = goldUSD + fxUSD;
   return {
     timestamp_utc: new Date().toISOString(),
-    unit_usd: unitUSD || 0,
-    gold_usd_per_oz_twap: goldTWAP || 0,
-    fx_usd_twap: fxTWAP,
-    unit_gold_grams: unitGold || 0,
-    hundred_units_usd: unitUSD ? unitUSD * 100 : 0
+    unit_usd: unitUSD,
+    unit_gold_grams: unitGold,
+    hundred_units_usd: unitUSD * 100,
+    gold_usd_per_oz_twap: goldTWAP,
+    fx_usd_twap: fxTWAP
   };
 }
 
-// ===== Routes =====
-app.get("/latest.json", async (req, res) => {
+// ===== Route =====
+app.get("/latest.json", async (_, res) => {
   try {
-    const unit = await generateUnitPrice();
-    res.json(unit);
-  } catch (err) {
-    console.error("Unexpected server error:", err);
-    // guaranteed fallback
-    res.status(200).json({
+    res.json(await generateUnitPrice());
+  } catch {
+    res.json({
       timestamp_utc: new Date().toISOString(),
       unit_usd: 0,
+      unit_gold_grams: UNIT_BASE_GOLD,
+      hundred_units_usd: 0,
       gold_usd_per_oz_twap: 0,
-      fx_usd_twap: FX_LIST.reduce((a, c) => { a[c] = 0; return a; }, {}),
-      unit_gold_grams: 0,
-      hundred_units_usd: 0
+      fx_usd_twap: FX_LIST.reduce((a,c)=>{a[c]=0;return a;},{})
     });
   }
 });
 
-// ===== Start Server =====
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`BRICS Unit server running on ${PORT}`)
+);
