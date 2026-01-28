@@ -2,175 +2,191 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>BRICS Unit Basket v1</title>
+<title>BRICS Unit — Reference Basket</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 
 <style>
   body {
-    background:#0b0f14;
-    color:#ffd700;
-    font-family:Arial, sans-serif;
-    padding:20px;
+    margin: 0;
+    background: #0e1117;
+    color: #e6e6e6;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   }
-  .container {
-    max-width:1100px;
-    margin:auto;
+
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #1f2937;
   }
+
   h1 {
-    text-align:center;
-    margin-bottom:10px;
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
   }
+
+  #unitValue {
+    margin-top: 6px;
+    font-size: 26px;
+    font-weight: 700;
+    color: #CD7F32;
+  }
+
+  #controls {
+    padding: 12px 20px;
+    border-bottom: 1px solid #1f2937;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  label {
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  input[type="checkbox"] {
+    margin-right: 6px;
+  }
+
   #chart {
-    height:450px;
-    background:#0b0f14;
-    border-radius:8px;
-  }
-  .legend {
-    display:flex;
-    flex-wrap:wrap;
-    gap:12px;
-    margin-top:12px;
-    font-size:0.9em;
-  }
-  .legend label {
-    cursor:pointer;
-    user-select:none;
-  }
-  .legend input {
-    margin-right:6px;
-  }
-  .price-box {
-    background:#151a21;
-    padding:15px;
-    border-radius:8px;
-    margin-bottom:15px;
-  }
-  .row {
-    margin:4px 0;
+    height: 520px;
   }
 </style>
 </head>
 
 <body>
-<div class="container">
 
-<h1>BRICS Unit Basket v1</h1>
+<header>
+  <h1>BRICS Unit — Reference Basket</h1>
+  <div id="unitValue">—</div>
+</header>
 
-<div class="price-box">
-  <div class="row">Unit (USD): <b><span id="unitUsd">…</span></b></div>
-  <div class="row">Gold TWAP (USD/oz): <span id="goldPrice">…</span></div>
-  <div class="row">Gold grams per unit: <span id="goldGrams">0.9823</span></div>
-  <div class="row">Last update: <span id="timestamp">…</span></div>
+<div id="controls">
+  <label><input type="checkbox" data-series="gold" checked> Gold</label>
+  <label><input type="checkbox" data-series="BRL" checked> BRL</label>
+  <label><input type="checkbox" data-series="RUB" checked> RUB</label>
+  <label><input type="checkbox" data-series="INR" checked> INR</label>
+  <label><input type="checkbox" data-series="CNY" checked> CNY</label>
+  <label><input type="checkbox" data-series="ZAR" checked> ZAR</label>
+  <label><input type="checkbox" id="toggleUnit"> BRICS Unit</label>
 </div>
 
 <div id="chart"></div>
-<div class="legend" id="legend"></div>
-
-</div>
 
 <script>
-/* ================= CONFIG ================= */
-const FEED = "https://b-twap.onrender.com/latest.json";
+/* ================= COLORS (LOCKED) ================= */
+const COLORS = {
+  gold: "#FFD700",
+  BRL: "#1E8F4E",
+  RUB: "#B22222",
+  INR: "#FF9933",
+  CNY: "#D32F2F",
+  ZAR: "#1976D2",
+  unit: "#CD7F32"
+};
 
 /* ================= CHART ================= */
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
-  layout: { background: { color:"#0b0f14" }, textColor:"#ffd700" },
-  grid: { vertLines:{color:"#333"}, horzLines:{color:"#333"} },
-  timeScale: { timeVisible:true, secondsVisible:true }
+  layout: {
+    background: { color: "#0e1117" },
+    textColor: "#d1d5db"
+  },
+  grid: {
+    vertLines: { color: "#1f2937" },
+    horzLines: { color: "#1f2937" }
+  },
+  timeScale: { timeVisible: true, secondsVisible: true }
 });
 
 /* ================= SERIES ================= */
-const goldSeries = chart.addCandlestickSeries({
-  upColor:"#ffd700",
-  downColor:"#ff4b4b",
-  wickUpColor:"#ffd700",
-  wickDownColor:"#ff4b4b",
-  borderVisible:false
-});
-
-const fxColors = {
-  BRL:"#009c3b",
-  RUB:"#0039a6",
-  INR:"#ff9933",
-  CNY:"#de2910",
-  ZAR:"#007749"
+const series = {
+  gold: chart.addCandlestickSeries({ upColor: COLORS.gold, downColor: COLORS.gold, borderVisible: false, wickUpColor: COLORS.gold, wickDownColor: COLORS.gold }),
+  BRL: chart.addCandlestickSeries({ upColor: COLORS.BRL, downColor: COLORS.BRL, borderVisible: false }),
+  RUB: chart.addCandlestickSeries({ upColor: COLORS.RUB, downColor: COLORS.RUB, borderVisible: false }),
+  INR: chart.addCandlestickSeries({ upColor: COLORS.INR, downColor: COLORS.INR, borderVisible: false }),
+  CNY: chart.addCandlestickSeries({ upColor: COLORS.CNY, downColor: COLORS.CNY, borderVisible: false }),
+  ZAR: chart.addCandlestickSeries({ upColor: COLORS.ZAR, downColor: COLORS.ZAR, borderVisible: false }),
+  unit: chart.addCandlestickSeries({ upColor: COLORS.unit, downColor: COLORS.unit, borderVisible: false })
 };
 
-const fxSeries = {};
-Object.keys(fxColors).forEach(ccy => {
-  fxSeries[ccy] = chart.addLineSeries({
-    color: fxColors[ccy],
-    lineWidth: 2,
-    priceLineVisible: false
-  });
-});
+/* ================= STATE ================= */
+const history = {};
+Object.keys(series).forEach(k => history[k] = []);
 
-const unitSeries = chart.addLineSeries({
-  color:"#cd7f32",
-  lineWidth:3,
-  priceLineVisible:true
-});
+/* ================= FETCH ================= */
+async function poll() {
+  const r = await fetch("https://YOUR-RENDER-URL/latest.json");
+  const d = await r.json();
 
-/* ================= LEGEND ================= */
-const legend = document.getElementById("legend");
+  const t = Math.floor(Date.now() / 1000);
 
-function toggle(name, series, on=true) {
-  const id = "t_" + name;
-  const label = document.createElement("label");
-  label.innerHTML = `<input id="${id}" type="checkbox" ${on?"checked":""}> ${name}`;
-  legend.appendChild(label);
-  document.getElementById(id).onchange = e =>
-    series.applyOptions({ visible: e.target.checked });
-}
+  document.getElementById("unitValue").textContent =
+    `$${d.unit_usd.toFixed(4)} USD`;
 
-toggle("Gold", goldSeries);
-Object.keys(fxSeries).forEach(c => toggle(c, fxSeries[c]));
-toggle("Total Unit", unitSeries);
+  push("gold", d.gold.usd_value);
+  push("BRL", d.fx.BRL.usd);
+  push("RUB", d.fx.RUB.usd);
+  push("INR", d.fx.INR.usd);
+  push("CNY", d.fx.CNY.usd);
+  push("ZAR", d.fx.ZAR.usd);
+  push("unit", d.unit_usd);
 
-/* ================= DATA ================= */
-let goldCandle = null;
-let goldCandles = [];
-
-async function tick() {
-  try {
-    const d = await (await fetch(FEED)).json();
-    const t = Math.floor(Date.now() / 1000);
-
-    document.getElementById("unitUsd").textContent = d.unit_usd.toFixed(2);
-    document.getElementById("goldPrice").textContent =
-      d.gold.usd_per_oz_twap.toFixed(2);
-    document.getElementById("timestamp").textContent =
-      d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
-
-    // Gold candlestick (USD/oz)
-    const g = d.gold.usd_per_oz_twap;
-    if (!goldCandle || goldCandle.time !== t) {
-      if (goldCandle) goldCandles.push(goldCandle);
-      goldCandle = { time:t, open:g, high:g, low:g, close:g };
-      goldSeries.setData(goldCandles.concat([goldCandle]));
-    } else {
-      goldCandle.high = Math.max(goldCandle.high, g);
-      goldCandle.low  = Math.min(goldCandle.low, g);
-      goldCandle.close = g;
-      goldSeries.update(goldCandle);
-    }
-
-    // FX USD legs
-    Object.entries(d.fx).forEach(([ccy, o]) => {
-      fxSeries[ccy].update({ time:t, value:o.usd });
-    });
-
-    // Total unit
-    unitSeries.update({ time:t, value:d.unit_usd });
-
-  } catch (e) {
-    console.error("feed error", e);
+  function push(k, v) {
+    const h = history[k];
+    const prev = h[h.length - 1];
+    const candle = {
+      time: t,
+      open: prev ? prev.close : v,
+      high: Math.max(v, prev ? prev.close : v),
+      low: Math.min(v, prev ? prev.close : v),
+      close: v
+    };
+    h.push(candle);
+    series[k].setData(h);
   }
 }
 
-tick();
-setInterval(tick, 1000);
+setInterval(poll, 5000);
+poll();
+
+/* ================= TOGGLES ================= */
+document.querySelectorAll("#controls input").forEach(cb => {
+  cb.addEventListener("change", updateVisibility);
+});
+
+function updateVisibility() {
+  const unitOn = document.getElementById("toggleUnit").checked;
+
+  Object.keys(series).forEach(k => {
+    let visible = true;
+    let opacity = 1;
+
+    if (unitOn) {
+      if (k === "unit") {
+        visible = true;
+        opacity = 1;
+      } else {
+        visible = true;
+        opacity = 0.25;
+      }
+    } else {
+      const cb = document.querySelector(`input[data-series="${k}"]`);
+      visible = cb ? cb.checked : false;
+      opacity = 1;
+    }
+
+    series[k].applyOptions({
+      visible,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      opacity
+    });
+  });
+}
 </script>
+
 </body>
 </html>
