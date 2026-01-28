@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>BRICS Unit Basket v1</title>
+
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+
+<style>
+  body {
+    background:#0b0f14;
+    color:#ffd700;
+    font-family:Arial, sans-serif;
+    padding:20px;
+  }
+  .container {
+    max-width:1100px;
+    margin:auto;
+  }
+  h1 {
+    text-align:center;
+    margin-bottom:10px;
+  }
+  #chart {
+    height:450px;
+    background:#0b0f14;
+    border-radius:8px;
+  }
+  .legend {
+    display:flex;
+    flex-wrap:wrap;
+    gap:12px;
+    margin-top:12px;
+    font-size:0.9em;
+  }
+  .legend label {
+    cursor:pointer;
+    user-select:none;
+  }
+  .legend input {
+    margin-right:6px;
+  }
+  .price-box {
+    background:#151a21;
+    padding:15px;
+    border-radius:8px;
+    margin-bottom:15px;
+  }
+  .row {
+    margin:4px 0;
+  }
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<h1>BRICS Unit Basket v1</h1>
+
+<div class="price-box">
+  <div class="row">Unit (USD): <b><span id="unitUsd">…</span></b></div>
+  <div class="row">Gold TWAP (USD/oz): <span id="goldPrice">…</span></div>
+  <div class="row">Gold grams per unit: <span id="goldGrams">0.9823</span></div>
+  <div class="row">Last update: <span id="timestamp">…</span></div>
+</div>
+
+<div id="chart"></div>
+
+<div class="legend" id="legend"></div>
+
+</div>
+
+<script>
+const FEED = "/latest.json";
+
+// ===== Chart =====
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  layout: { background: { color:"#0b0f14" }, textColor:"#ffd700" },
+  grid: { vertLines:{color:"#333"}, horzLines:{color:"#333"} },
+  timeScale: { timeVisible:true, secondsVisible:true }
+});
+
+// ===== Series =====
+const goldSeries = chart.addCandlestickSeries({
+  upColor:"#ffd700",
+  downColor:"#ff4b4b",
+  wickUpColor:"#ffd700",
+  wickDownColor:"#ff4b4b",
+  borderVisible:false
+});
+
+const fxColors = {
+  BRL: "#009c3b",   // Brazil
+  RUB: "#0039a6",   // Russia
+  INR: "#ff9933",   // India
+  CNY: "#de2910",   // China
+  ZAR: "#007749"    // South Africa
+};
+
+const fxSeries = {};
+Object.keys(fxColors).forEach(c => {
+  fxSeries[c] = chart.addLineSeries({
+    color: fxColors[c],
+    lineWidth: 2,
+    priceLineVisible: false
+  });
+});
+
+const unitSeries = chart.addLineSeries({
+  color: "#cd7f32", // bronze
+  lineWidth: 3,
+  priceLineVisible: true
+});
+
+// ===== Legend =====
+const legend = document.getElementById("legend");
+
+function addToggle(name, series, checked=true) {
+  const id = "toggle_" + name;
+  const label = document.createElement("label");
+  label.innerHTML = `<input type="checkbox" id="${id}" ${checked?"checked":""}> ${name}`;
+  legend.appendChild(label);
+
+  document.getElementById(id).onchange = e => {
+    series.applyOptions({ visible: e.target.checked });
+  };
+}
+
+addToggle("Gold (USD)", goldSeries, true);
+Object.keys(fxSeries).forEach(c => addToggle(c, fxSeries[c], true));
+addToggle("Total Unit", unitSeries, true);
+
+// ===== Candle storage =====
+let goldCandle = null;
+let goldCandles = [];
+
+// ===== Tick =====
+async function tick() {
+  try {
+    const d = await (await fetch(FEED)).json();
+    const t = Math.floor(Date.now() / 1000);
+
+    // ---- Header ----
+    document.getElementById("unitUsd").textContent = d.unit_usd.toFixed(2);
+    document.getElementById("goldPrice").textContent = d.gold.usd_per_oz_twap.toFixed(2);
+    document.getElementById("timestamp").textContent =
+      d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+
+    // ---- Gold candles ----
+    const g = d.gold.usd_per_oz_twap;
+    if (!goldCandle || goldCandle.time !== t) {
+      if (goldCandle) goldCandles.push(goldCandle);
+      goldCandle = { time:t, open:g, high:g, low:g, close:g };
+      goldSeries.setData(goldCandles.concat([goldCandle]));
+    } else {
+      goldCandle.high = Math.max(goldCandle.high, g);
+      goldCandle.low = Math.min(goldCandle.low, g);
+      goldCandle.close = g;
+      goldSeries.update(goldCandle);
+    }
+
+    // ---- FX lines (USD contribution) ----
+    Object.entries(d.fx).forEach(([ccy, obj]) => {
+      fxSeries[ccy].update({
+        time: t,
+        value: obj.usd
+      });
+    });
+
+    // ---- Total unit overlay ----
+    unitSeries.update({
+      time: t,
+      value: d.unit_usd
+    });
+
+  } catch (e) {
+    console.error("tick error", e);
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
