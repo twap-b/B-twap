@@ -1,10 +1,8 @@
-// server.js — BRICS Unit Basket v1 (correct economic model)
-
+// server.js — BRICS Unit Basket v2 (working live simulation)
 import express from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import fetch from "node-fetch";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,158 +11,105 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+app.use(express.static(path.join(__dirname, "public")));
 
-// =====================
-// FROZEN CONSTANTS
-// =====================
-const GOLD_G_PER_OZ = 31.1034768;
-const UNIT_BASE_GOLD_G = 0.9823;
+// ===== Constants =====
+const GOLD_G_PER_OZ = 31.1034768;       // grams per troy ounce
+const UNIT_BASE_GOLD_G = 0.9823;        // grams per unit
 
-const GOLD_WEIGHT = 0.40;
-const FX_WEIGHT = 0.12;
-const FX_LIST = ["BRL", "RUB", "INR", "CNY", "ZAR"];
+const GOLD_WEIGHT = 0.40;               // 40% USD contribution from gold
+const FX_WEIGHT = 0.12;                 // 12% each BRICS currency
+const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 
-const TWAP_WINDOW_MS = 5000;
+const TWAP_WINDOW_MS = 5000;            // TWAP over 5 seconds
 
-// =====================
-// TWAP STORAGE
-// =====================
+// ===== Storage for TWAP =====
 let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(c => fxHistory[c] = []);
 
-// =====================
-// HELPERS
-// =====================
-function store(history, value) {
+// ===== Helpers =====
+function store(history, value){
   const now = Date.now();
   history.push({ t: now, v: value });
+  // keep only last TWAP_WINDOW_MS ms
   return history.filter(p => now - p.t <= TWAP_WINDOW_MS);
 }
 
-function twap(history, fallback) {
-  if (!history.length) return fallback;
-  return history.reduce((s,p)=>s+p.v,0) / history.length;
+function twap(history){
+  if(!history.length) return 0;
+  return history.reduce((s,p)=>s+p.v,0)/history.length;
 }
 
-async function safeJSON(url, fallback) {
-  try {
-    const r = await fetch(url, { timeout: 4000 });
-    if (!r.ok) throw new Error();
-    return await r.json();
-  } catch {
-    return fallback;
-  }
+// ===== Simulated live market data =====
+// Gold moves slowly +/- 50 around 1900 USD
+function simulateGold() {
+  return 1900 + Math.sin(Date.now()/60000)*50;
 }
 
-// =====================
-// MARKET DATA
-// =====================
-async function fetchGoldUSD() {
-  // primary
-  const d = await safeJSON(
-    "https://api.metals.live/v1/spot/gold",
-    null
-  );
-
-  if (d && d[0]?.gold) return d[0].gold;
-
-  // secondary fallback
-  const alt = await safeJSON(
-    "https://api.gold-api.com/price/XAU",
-    { price: 1900 }
-  );
-
-  return alt.price;
-}
-
-async function fetchFX() {
-  const d = await safeJSON(
-    "https://api.exchangerate.host/latest?base=USD&symbols=" + FX_LIST.join(","),
-    { rates: { BRL:5, RUB:90, INR:83, CNY:7.2, ZAR:18 } }
-  );
-  return d.rates;
-}
-
-// =====================
-// CORE CALCULATION
-// =====================
-async function computeUnit() {
-  // --- Fetch ---
-  const goldSpot = await fetchGoldUSD(); // USD / oz
-  const fxRates  = await fetchFX();      // USD → FX
-
-  // --- TWAP ---
-  goldHistory = store(goldHistory, goldSpot);
-  const goldTWAP = twap(goldHistory, goldSpot);
-
-  // --- Gold USD value ---
-  const goldUSD =
-    (UNIT_BASE_GOLD_G / GOLD_G_PER_OZ) *
-    goldTWAP *
-    GOLD_WEIGHT;
-
-  // --- Total unit USD ---
-  const unitUSD = goldUSD / GOLD_WEIGHT;
-
-  // --- FX basket ---
-  const fxUSDPerLeg = unitUSD * FX_WEIGHT;
-
-  const fxTWAP = {};
-  const fxBasket = {};
-
-  FX_LIST.forEach(c => {
-    fxHistory[c] = store(fxHistory[c], fxRates[c]);
-    const rateTWAP = twap(fxHistory[c], fxRates[c]);
-
-    fxTWAP[c] = rateTWAP;
-
-    fxBasket[c] = {
-      usd_share: fxUSDPerLeg,
-      currency_amount: fxUSDPerLeg * rateTWAP
-    };
-  });
-
+// FX currencies fluctuate slowly around typical USD rates
+function simulateFX(){
   return {
-    timestamp_utc: new Date().toISOString(),
-
-    unit_usd: unitUSD,
-    hundred_units_usd: unitUSD * 100,
-    unit_gold_grams: UNIT_BASE_GOLD_G,
-
-    gold_usd_per_oz_twap: goldTWAP,
-
-    // for frontend
-    fx_usd_twap: fxTWAP,
-    fx_basket: fxBasket
+    BRL: 5 + Math.sin(Date.now()/90000),
+    RUB: 90 + Math.sin(Date.now()/80000),
+    INR: 83 + Math.sin(Date.now()/70000),
+    CNY: 7.2 + Math.sin(Date.now()/100000),
+    ZAR: 18 + Math.sin(Date.now()/110000)
   };
 }
 
-// =====================
-// ROUTES
-// =====================
-app.get("/latest.json", async (_req, res) => {
+// ===== Compute unit price =====
+function computeUnitPrice(){
+  const goldSpot = simulateGold();
+  const fxSpot = simulateFX();
+
+  goldHistory = store(goldHistory, goldSpot);
+  const goldTWAP = twap(goldHistory);
+
+  const fxTWAP = {};
+  FX_LIST.forEach(c => {
+    fxHistory[c] = store(fxHistory[c], fxSpot[c]);
+    fxTWAP[c] = twap(fxHistory[c]);
+  });
+
+  // ----- Gold USD contribution -----
+  // unit has fixed grams of gold, weighted 40% of USD basket
+  const goldUSD = (UNIT_BASE_GOLD_G / GOLD_G_PER_OZ) * goldTWAP * GOLD_WEIGHT;
+
+  // ----- FX USD contribution -----
+  let fxUSD = 0;
+  FX_LIST.forEach(c => {
+    fxUSD += FX_WEIGHT * (goldUSD / GOLD_WEIGHT); // proportionate
+  });
+
+  const unitUSD = goldUSD + fxUSD;
+
+  return {
+    timestamp_utc: new Date().toISOString(),
+    gold_usd_per_oz_twap: goldTWAP,
+    unit_gold_grams: UNIT_BASE_GOLD_G,
+    unit_usd: unitUSD,
+    hundred_units_usd: unitUSD * 100,
+    fx_usd_twap: fxTWAP
+  };
+}
+
+// ===== Route =====
+app.get("/latest.json", (_, res) => {
   try {
-    res.json(await computeUnit());
-  } catch (e) {
-    console.error(e);
+    const data = computeUnitPrice();
+    res.json(data);
+  } catch(e){
+    console.error("Error generating unit:", e);
     res.json({
       timestamp_utc: new Date().toISOString(),
       unit_usd: 0,
-      hundred_units_usd: 0,
-      unit_gold_grams: UNIT_BASE_GOLD_G,
       gold_usd_per_oz_twap: 0,
-      fx_usd_twap: {},
-      fx_basket: {}
+      unit_gold_grams: UNIT_BASE_GOLD_G,
+      hundred_units_usd: 0,
+      fx_usd_twap: FX_LIST.reduce((o,c)=>(o[c]=0,o),{})
     });
   }
 });
 
-// =====================
-// STATIC (AFTER API)
-// =====================
-app.use(express.static(path.join(__dirname, "public")));
-
-app.listen(PORT, () =>
-  console.log(`BRICS Unit Basket v1 running on ${PORT}`)
-);
+app.listen(PORT, () => console.log(`BRICS Unit Basket server running on ${PORT}`));
