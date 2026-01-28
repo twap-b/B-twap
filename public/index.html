@@ -9,7 +9,7 @@
 <style>
   body {
     background:#0b0f14;
-    color:#eaeaea;
+    color:#ffd700;
     font-family:Arial, sans-serif;
     padding:20px;
   }
@@ -19,22 +19,12 @@
   }
   h1 {
     text-align:center;
-    color:#ffd700;
-    margin-bottom:12px;
+    margin-bottom:10px;
   }
   #chart {
     height:450px;
     background:#0b0f14;
     border-radius:8px;
-  }
-  .price-box {
-    background:#151a21;
-    padding:15px;
-    border-radius:8px;
-    margin-bottom:15px;
-  }
-  .row {
-    margin:4px 0;
   }
   .legend {
     display:flex;
@@ -47,6 +37,18 @@
     cursor:pointer;
     user-select:none;
   }
+  .legend input {
+    margin-right:6px;
+  }
+  .price-box {
+    background:#151a21;
+    padding:15px;
+    border-radius:8px;
+    margin-bottom:15px;
+  }
+  .row {
+    margin:4px 0;
+  }
 </style>
 </head>
 
@@ -57,9 +59,8 @@
 
 <div class="price-box">
   <div class="row">Unit (USD): <b><span id="unitUsd">…</span></b></div>
-  <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
   <div class="row">Gold TWAP (USD/oz): <span id="goldPrice">…</span></div>
-  <div class="row">Gold grams per unit: <span>0.9823</span></div>
+  <div class="row">Gold grams per unit: <span id="goldGrams">0.9823</span></div>
   <div class="row">Last update: <span id="timestamp">…</span></div>
 </div>
 
@@ -70,30 +71,16 @@
 
 <script>
 /* ================= CONFIG ================= */
-
-// 🔴 CHANGE NOTHING EXCEPT THIS IF SERVER MOVES
-const FEED_URL = "https://b-twap.onrender.com/latest.json";
+const FEED = "https://b-twap.onrender.com/latest.json";
 
 /* ================= CHART ================= */
-
-const chart = LightweightCharts.createChart(
-  document.getElementById("chart"),
-  {
-    layout: { background: { color:"#0b0f14" }, textColor:"#eaeaea" },
-    grid: {
-      vertLines:{ color:"#333" },
-      horzLines:{ color:"#333" }
-    },
-    timeScale: {
-      timeVisible:true,
-      secondsVisible:true
-    }
-  }
-);
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  layout: { background: { color:"#0b0f14" }, textColor:"#ffd700" },
+  grid: { vertLines:{color:"#333"}, horzLines:{color:"#333"} },
+  timeScale: { timeVisible:true, secondsVisible:true }
+});
 
 /* ================= SERIES ================= */
-
-// Gold (USD/oz) candlesticks
 const goldSeries = chart.addCandlestickSeries({
   upColor:"#ffd700",
   downColor:"#ff4b4b",
@@ -102,13 +89,12 @@ const goldSeries = chart.addCandlestickSeries({
   borderVisible:false
 });
 
-// FX USD contribution lines
 const fxColors = {
-  BRL: "#009c3b",
-  RUB: "#0039a6",
-  INR: "#ff9933",
-  CNY: "#de2910",
-  ZAR: "#007749"
+  BRL:"#009c3b",
+  RUB:"#0039a6",
+  INR:"#ff9933",
+  CNY:"#de2910",
+  ZAR:"#007749"
 };
 
 const fxSeries = {};
@@ -120,7 +106,6 @@ Object.keys(fxColors).forEach(ccy => {
   });
 });
 
-// Total unit overlay
 const unitSeries = chart.addLineSeries({
   color:"#cd7f32",
   lineWidth:3,
@@ -128,73 +113,59 @@ const unitSeries = chart.addLineSeries({
 });
 
 /* ================= LEGEND ================= */
-
 const legend = document.getElementById("legend");
 
-function addToggle(label, series, checked=true) {
-  const id = "toggle_" + label;
-  const el = document.createElement("label");
-  el.innerHTML =
-    `<input type="checkbox" id="${id}" ${checked?"checked":""}> ${label}`;
-  legend.appendChild(el);
-  document.getElementById(id).onchange =
-    e => series.applyOptions({ visible:e.target.checked });
+function toggle(name, series, on=true) {
+  const id = "t_" + name;
+  const label = document.createElement("label");
+  label.innerHTML = `<input id="${id}" type="checkbox" ${on?"checked":""}> ${name}`;
+  legend.appendChild(label);
+  document.getElementById(id).onchange = e =>
+    series.applyOptions({ visible: e.target.checked });
 }
 
-addToggle("Gold (USD/oz)", goldSeries);
-Object.keys(fxSeries).forEach(ccy => addToggle(ccy, fxSeries[ccy]));
-addToggle("Total Unit", unitSeries);
+toggle("Gold", goldSeries);
+Object.keys(fxSeries).forEach(c => toggle(c, fxSeries[c]));
+toggle("Total Unit", unitSeries);
 
-/* ================= DATA LOOP ================= */
-
+/* ================= DATA ================= */
 let goldCandle = null;
-let goldHistory = [];
+let goldCandles = [];
 
 async function tick() {
   try {
-    const res = await fetch(FEED_URL);
-    const d = await res.json();
+    const d = await (await fetch(FEED)).json();
     const t = Math.floor(Date.now() / 1000);
 
-    // Header
-    document.getElementById("unitUsd").textContent =
-      d.unit_usd.toFixed(2);
-    document.getElementById("hundredUsd").textContent =
-      d.hundred_units_usd.toFixed(2);
+    document.getElementById("unitUsd").textContent = d.unit_usd.toFixed(2);
     document.getElementById("goldPrice").textContent =
       d.gold.usd_per_oz_twap.toFixed(2);
     document.getElementById("timestamp").textContent =
       d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-    // Gold candles (USD/oz)
+    // Gold candlestick (USD/oz)
     const g = d.gold.usd_per_oz_twap;
     if (!goldCandle || goldCandle.time !== t) {
-      if (goldCandle) goldHistory.push(goldCandle);
+      if (goldCandle) goldCandles.push(goldCandle);
       goldCandle = { time:t, open:g, high:g, low:g, close:g };
-      goldSeries.setData(goldHistory.concat([goldCandle]));
+      goldSeries.setData(goldCandles.concat([goldCandle]));
     } else {
       goldCandle.high = Math.max(goldCandle.high, g);
-      goldCandle.low = Math.min(goldCandle.low, g);
+      goldCandle.low  = Math.min(goldCandle.low, g);
       goldCandle.close = g;
       goldSeries.update(goldCandle);
     }
 
-    // FX USD contribution lines
-    Object.entries(d.fx).forEach(([ccy, obj]) => {
-      fxSeries[ccy].update({
-        time:t,
-        value:obj.usd
-      });
+    // FX USD legs
+    Object.entries(d.fx).forEach(([ccy, o]) => {
+      fxSeries[ccy].update({ time:t, value:o.usd });
     });
 
-    // Total unit overlay
-    unitSeries.update({
-      time:t,
-      value:d.unit_usd
-    });
+    // Total unit
+    unitSeries.update({ time:t, value:d.unit_usd });
 
-  } catch (err) {
-    console.error("Feed error", err);
+  } catch (e) {
+    console.error("feed error", e);
   }
 }
 
