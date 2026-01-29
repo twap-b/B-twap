@@ -3,41 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <title>BRICS Unit Basket – Live TWAP + Candles</title>
-
 <style>
-  body { background:#0b0f14; color:#ffd700; font-family:Arial,sans-serif; padding:20px; }
-  .container { max-width:950px; margin:auto; }
-  h1 { text-align:center; color:#ffd700; }
-  .price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
-  .price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#ffd700; }
-  .row { margin:5px 0; font-size:1.1em; color:#ffd700; }
-  #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
-  select { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#ffd700; border:1px solid #333; }
+body { background:#0b0f14; color:#ffd700; font-family:Arial,sans-serif; padding:20px; }
+.container { max-width:950px; margin:auto; }
+h1 { text-align:center; color:#ffd700; }
+.price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
+.price-box .price { font-size:2em; text-align:center; margin:10px 0; color:#ffd700; }
+.row { margin:5px 0; font-size:1.1em; color:#ffd700; }
+#chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
+select, input { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#ffd700; border:1px solid #333; }
 
-  .fx-row {
-    display:flex;
-    justify-content:space-between;
-    padding:6px 10px;
-    border-radius:4px;
-    margin:3px 0;
-    font-size:0.95em;
-    color:#fff;
-  }
+.fx-row { display:flex; justify-content:space-between; background:#1a1f28; padding:6px 10px; border-radius:4px; margin:3px 0; color:#ffd700; font-size:0.95em; }
+.fx-left { font-weight:bold; }
+.fx-right { text-align:right; }
 
-  .fx-left { font-weight:bold; }
-  .fx-right { text-align:right; }
+.fx-BRICS { background:#CD7F32; color:#fff; }
 
-  .fx-BRL { background:#1E8F4E; }
-  .fx-RUB { background:#B22222; }
-  .fx-INR { background:#FF9933; }
-  .fx-CNY { background:#D32F2F; }
-  .fx-ZAR { background:#1976D2; }
-  .fx-BRICS { background:#CD7F32; color:#fff; }
-
-  .footnote { font-size:.85em; color:#aaa; margin-top:20px; line-height:1.4; }
+.footnote { font-size:.85em; color:#aaa; margin-top:20px; line-height:1.4; }
 </style>
 </head>
-
 <body>
 <div class="container">
 <h1>BRICS Unit Basket – Live TWAP + Candles</h1>
@@ -62,11 +46,7 @@
       <option value="10080">1 week</option>
       <option value="43200">1 month</option>
     </select>
-  </div>
-
-  <div class="row">
-    Show BRICS Unit:
-    <input type="checkbox" id="toggleBRICS">
+    <label><input type="checkbox" id="toggleBRICS"> Show BRICS Unit Overlay</label>
   </div>
 
   <div id="fxContainer"></div>
@@ -85,139 +65,85 @@ Toggle shows synthesized BRICS unit in bronze overlay.
 <script>
 const FEED_URL = "/latest.json";
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
-const FX_COLOR = {
-  BRL:"#1E8F4E",
-  RUB:"#B22222",
-  INR:"#FF9933",
-  CNY:"#D32F2F",
-  ZAR:"#1976D2",
-  BRICS:"#CD7F32"
-};
 const FX_WEIGHT = 0.12;
 
-// --- Chart setup ---
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
   layout:{ background:{color:"#0b0f14"}, textColor:"#ffd700" },
   grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
   timeScale:{ timeVisible:true, secondsVisible:true }
 });
 
-// Each series per leg
-const series = {};
-FX_LIST.forEach(c=>{
-  series[c] = chart.addCandlestickSeries({
-    upColor: FX_COLOR[c],
-    downColor: FX_COLOR[c],
-    wickUpColor: FX_COLOR[c],
-    wickDownColor: FX_COLOR[c],
-    borderVisible:false
-  });
-});
-const goldSeries = chart.addCandlestickSeries({
-  upColor: FX_COLOR['BRICS'], // gold as yellow/gold
-  downColor: FX_COLOR['BRICS'],
-  wickUpColor: FX_COLOR['BRICS'],
-  wickDownColor: FX_COLOR['BRICS'],
+const candleSeries = chart.addCandlestickSeries({
+  upColor:"#ffd700",
+  downColor:"#ff4b4b",
+  wickUpColor:"#ffd700",
+  wickDownColor:"#ff4b4b",
   borderVisible:false
 });
+
 const bricsSeries = chart.addCandlestickSeries({
-  upColor: FX_COLOR['BRICS'],
-  downColor: FX_COLOR['BRICS'],
-  wickUpColor: FX_COLOR['BRICS'],
-  wickDownColor: FX_COLOR['BRICS'],
-  borderVisible:false,
-  priceLineVisible:false
+  upColor:"#CD7F32",
+  downColor:"#CD7F32",
+  wickUpColor:"#CD7F32",
+  wickDownColor:"#CD7F32",
+  borderVisible:false
 });
 
-// --- FX rows ---
+// ---- FX rows ----
 const fxContainer = document.getElementById("fxContainer");
 FX_LIST.forEach(ccy=>{
-  const row = document.createElement("div");
-  row.className = "fx-row fx-"+ccy;
-  row.id = "fx_"+ccy;
-  row.innerHTML = `<div class="fx-left">${ccy}</div><div class="fx-right">…</div>`;
-  fxContainer.appendChild(row);
+  const d = document.createElement("div");
+  d.className="fx-row";
+  d.id="fx_" + ccy;
+  d.innerHTML=`<div class="fx-left">${ccy}</div><div class="fx-right">…</div>`;
+  fxContainer.appendChild(d);
 });
 
-// BRICS overlay row
-const bricsRow = document.createElement("div");
-bricsRow.className="fx-row fx-BRICS";
-bricsRow.id="fx_BRICS";
-bricsRow.innerHTML = `<div class="fx-left">BRICS Unit</div><div class="fx-right">…</div>`;
-fxContainer.appendChild(bricsRow);
-
-// --- Candles ---
+// ---- Candles ----
 function candleTime(ts,tf){ return Math.floor(ts/(tf*60)); }
-let tf = parseInt(document.getElementById("timeframe").value);
-let candles = {};
-FX_LIST.concat(['gold','BRICS']).forEach(k=>candles[k]=[]);
-let current = {};
+let candles=[], current=null;
+let tf=parseInt(document.getElementById("timeframe").value);
 
 async function tick(){
-  try{
+  try {
     const d = await (await fetch(FEED_URL)).json();
     const unitUSD = d.unit_usd;
 
+    // --- Update HTML ---
     document.getElementById("unitUsd").textContent = unitUSD.toFixed(2);
     document.getElementById("unitGold").textContent = d.unit_gold_grams.toFixed(6);
     document.getElementById("hundredUsd").textContent = d.hundred_units_usd.toFixed(2);
     document.getElementById("goldTwap").textContent = d.gold_usd_per_oz_twap.toFixed(2);
-    document.getElementById("timestamp").textContent =
-      d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+    document.getElementById("timestamp").textContent = d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-    const t = candleTime(Date.now()/1000, tf);
-
-    // --- Gold candle ---
-    if(!current['gold'] || current['gold'].time!==t){
-      if(current['gold']) goldSeries.setData(candles['gold'].concat([current['gold']]));
-      current['gold']={time:t, open:unitUSD*d.GOLD_WEIGHT, high:unitUSD*d.GOLD_WEIGHT, low:unitUSD*d.GOLD_WEIGHT, close:unitUSD*d.GOLD_WEIGHT};
-      candles['gold'].push(current['gold']);
-    } else {
-      current['gold'].high = Math.max(current['gold'].high, unitUSD*d.GOLD_WEIGHT);
-      current['gold'].low = Math.min(current['gold'].low, unitUSD*d.GOLD_WEIGHT);
-      current['gold'].close = unitUSD*d.GOLD_WEIGHT;
-      goldSeries.update(current['gold']);
-    }
-
-    // --- FX candles ---
+    // ---- FX basket math ----
     FX_LIST.forEach(ccy=>{
       const usdShare = unitUSD * FX_WEIGHT;
-      if(!current[ccy] || current[ccy].time!==t){
-        if(current[ccy]) series[ccy].setData(candles[ccy].concat([current[ccy]]));
-        current[ccy]={time:t, open:usdShare, high:usdShare, low:usdShare, close:usdShare};
-        candles[ccy].push(current[ccy]);
-      } else {
-        current[ccy].high=Math.max(current[ccy].high,usdShare);
-        current[ccy].low=Math.min(current[ccy].low,usdShare);
-        current[ccy].close=usdShare;
-        series[ccy].update(current[ccy]);
-      }
-
-      // --- FX row display ---
       const fxRate = d.fx_usd_twap[ccy];
       const fxAmount = usdShare * fxRate;
       document.querySelector(`#fx_${ccy} .fx-right`).innerHTML=`$${usdShare.toFixed(2)} | ${fxAmount.toFixed(2)} ${ccy}`;
     });
 
-    // --- BRICS unit overlay ---
-    const showBRICS = document.getElementById("toggleBRICS").checked;
-    if(showBRICS){
-      bricsSeries.applyOptions({ priceLineVisible:true });
-      bricsSeries.setData([{time:t, open:unitUSD, high:unitUSD, low:unitUSD, close:unitUSD}]);
-      // fade underlying series
-      FX_LIST.concat(['gold']).forEach(k=>{
-        const s = k==='gold'? goldSeries : series[k];
-        s.applyOptions({ upColor: "rgba(255,255,255,0.2)", downColor:"rgba(255,255,255,0.2)", wickUpColor:"rgba(255,255,255,0.2)", wickDownColor:"rgba(255,255,255,0.2)"});
-      });
+    // ---- Candlestick update ----
+    const t = candleTime(Date.now()/1000, tf);
+    if(!current || current.time!==t){
+      if(current) candles.push(current);
+      current={time:t, open:unitUSD, high:unitUSD, low:unitUSD, close:unitUSD};
+      candleSeries.setData(candles.concat([current]));
     } else {
-      // restore colors
-      FX_LIST.forEach(k=>{
-        series[k].applyOptions({ upColor: FX_COLOR[k], downColor: FX_COLOR[k], wickUpColor: FX_COLOR[k], wickDownColor: FX_COLOR[k]});
-      });
-      goldSeries.applyOptions({ upColor: "#FFD700", downColor:"#FFD700", wickUpColor:"#FFD700", wickDownColor:"#FFD700"});
+      current.high = Math.max(current.high, unitUSD);
+      current.low  = Math.min(current.low, unitUSD);
+      current.close = unitUSD;
+      candleSeries.update(current);
     }
 
-  } catch(e){ console.error("Tick error:",e); }
+    // ---- BRICS overlay ----
+    const showBRICS = document.getElementById("toggleBRICS").checked;
+    if(showBRICS){
+      bricsSeries.setData([{time:t, open:unitUSD, high:unitUSD, low:unitUSD, close:unitUSD}]);
+    }
+
+  } catch(e){ console.error("Tick error:", e); }
 }
 
 tick();
@@ -225,8 +151,8 @@ setInterval(tick,1000);
 
 document.getElementById("timeframe").onchange = e=>{
   tf=parseInt(e.target.value);
-  FX_LIST.concat(['gold','BRICS']).forEach(k=>candles[k]=[]);
-  current={};
+  candles=[];
+  current=null;
 };
 </script>
 </body>
