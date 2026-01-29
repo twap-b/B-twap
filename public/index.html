@@ -103,13 +103,23 @@ const chart = LightweightCharts.createChart(document.getElementById("chart"), {
 
 /* ================= SERIES ================= */
 const series = {
-  gold: chart.addCandlestickSeries({ upColor: COLORS.gold, downColor: COLORS.gold, borderVisible: false, wickUpColor: COLORS.gold, wickDownColor: COLORS.gold }),
+  gold: chart.addCandlestickSeries({
+    upColor: COLORS.gold,
+    downColor: COLORS.gold,
+    borderVisible: false,
+    wickUpColor: COLORS.gold,
+    wickDownColor: COLORS.gold
+  }),
   BRL: chart.addCandlestickSeries({ upColor: COLORS.BRL, downColor: COLORS.BRL, borderVisible: false }),
   RUB: chart.addCandlestickSeries({ upColor: COLORS.RUB, downColor: COLORS.RUB, borderVisible: false }),
   INR: chart.addCandlestickSeries({ upColor: COLORS.INR, downColor: COLORS.INR, borderVisible: false }),
   CNY: chart.addCandlestickSeries({ upColor: COLORS.CNY, downColor: COLORS.CNY, borderVisible: false }),
   ZAR: chart.addCandlestickSeries({ upColor: COLORS.ZAR, downColor: COLORS.ZAR, borderVisible: false }),
-  unit: chart.addCandlestickSeries({ upColor: COLORS.unit, downColor: COLORS.unit, borderVisible: false })
+  unit: chart.addCandlestickSeries({
+    upColor: COLORS.unit,
+    downColor: COLORS.unit,
+    borderVisible: false
+  })
 };
 
 /* ================= STATE ================= */
@@ -118,7 +128,7 @@ Object.keys(series).forEach(k => history[k] = []);
 
 /* ================= FETCH ================= */
 async function poll() {
-  const r = await fetch("https://YOUR-RENDER-URL/latest.json");
+  const r = await fetch("https://brics-unit.onrender.com/latest.json");
   const d = await r.json();
 
   const t = Math.floor(Date.now() / 1000);
