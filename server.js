@@ -1,12 +1,21 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
-import genesis from "./genesis.json" assert { type: "json" };
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+
+// ===== Load frozen genesis FX =====
+const genesis = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "genesis.json"), "utf8")
+);
 
 // ===== Constants (FROZEN) =====
 const GOLD_G_PER_OZ = 31.1034768;
@@ -35,11 +44,11 @@ function twap(history) {
   return history.reduce((s, p) => s + p.v, 0) / history.length;
 }
 
-// ===== Live Market Fetch =====
+// ===== Live Market Fetch (Node 18+ native fetch) =====
 async function fetchGold() {
   const r = await fetch("https://api.metals.live/v1/spot/gold");
   const j = await r.json();
-  return j[0].gold; // USD / oz
+  return j[0].gold;
 }
 
 async function fetchFX() {
@@ -48,7 +57,7 @@ async function fetchFX() {
     FX_LIST.join(",")
   );
   const j = await r.json();
-  return j.rates; // USD → FX
+  return j.rates;
 }
 
 // ===== Compute Unit =====
@@ -66,15 +75,12 @@ async function computeUnit() {
     fxHistory[c] = store(fxHistory[c], fxSpot[c]);
     const fxT = twap(fxHistory[c]);
     fxTWAP[c] = fxT;
-
     ci += FX_WEIGHT * (fxT / genesis[c]);
   });
 
   const basketIndex = GOLD_WEIGHT + ci;
-
   const unitGoldG = UNIT_BASE_GOLD_G * basketIndex;
-  const unitUSD =
-    unitGoldG * (goldTWAP / GOLD_G_PER_OZ);
+  const unitUSD = unitGoldG * (goldTWAP / GOLD_G_PER_OZ);
 
   return {
     timestamp_utc: new Date().toISOString(),
@@ -91,11 +97,11 @@ app.get("/latest.json", async (_, res) => {
   try {
     res.json(await computeUnit());
   } catch (e) {
-    console.error(e);
+    console.error("Compute error:", e);
     res.status(500).json({ error: "feed unavailable" });
   }
 });
 
 app.listen(PORT, () =>
-  console.log(`BRICS Unit Basket v1 live on ${PORT}`)
+  console.log(`BRICS Unit Basket v1 live on port ${PORT}`)
 );
