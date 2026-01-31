@@ -2,214 +2,88 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>BRICS Unit Basket v1 – Live Reference Index</title>
+<title>BRICS Unit Basket v1</title>
 
 <style>
-  body {
-    background:#0b0f14;
-    color:#ffd700;
-    font-family:Arial,sans-serif;
-    padding:20px;
-  }
-  .container { max-width:960px; margin:auto; }
-  h1 { text-align:center; margin-bottom:10px; }
-
-  .price-box {
-    background:#151a21;
-    padding:20px;
-    border-radius:8px;
-    margin-bottom:20px;
-  }
-  .price {
-    font-size:2em;
-    text-align:center;
-    margin-bottom:10px;
-  }
-  .row { margin:4px 0; font-size:1.05em; }
-
-  #chart {
-    height:420px;
-    background:#0b0f14;
-    border-radius:8px;
-  }
-
-  select {
-    background:#151a21;
-    color:#ffd700;
-    border:1px solid #333;
-    padding:4px;
-    margin-left:5px;
-  }
-
-  .fx-row {
-    display:flex;
-    justify-content:space-between;
-    background:#1a1f28;
-    padding:6px 10px;
-    border-radius:4px;
-    margin:3px 0;
-    font-size:.95em;
-  }
-
-  .footnote {
-    font-size:.85em;
-    color:#aaa;
-    margin-top:15px;
-    line-height:1.4;
-  }
+body{background:#0b0f14;color:#ffd700;font-family:Arial;padding:20px}
+.container{max-width:960px;margin:auto}
+h1{text-align:center}
+.price-box{background:#151a21;padding:20px;border-radius:8px;margin-bottom:20px}
+.price{font-size:2em;text-align:center;margin-bottom:10px}
+.row{margin:4px 0}
+#chart{height:420px}
+.fx-row{display:flex;justify-content:space-between;background:#1a1f28;padding:6px 10px;border-radius:4px;margin:3px 0;font-size:.95em}
+.footnote{font-size:.85em;color:#aaa;margin-top:15px}
 </style>
 </head>
 
 <body>
 <div class="container">
-
 <h1>BRICS Unit Basket v1</h1>
 
 <div class="price-box">
-  <div class="price">
-    Reference Price (USD):
-    <strong><span id="unitUsd">…</span></strong>
-  </div>
-
-  <div class="row">Gold TWAP (USD / oz): <span id="goldTwap">…</span></div>
-  <div class="row">Gold per Unit (grams): 0.982300</div>
-  <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
-  <div class="row">Last Update (UTC): <span id="timestamp">…</span></div>
-
-  <div class="row">
-    Timeframe:
-    <select id="timeframe">
-      <option value="1">1 min</option>
-      <option value="15">15 min</option>
-      <option value="30">30 min</option>
-      <option value="60">1 hour</option>
-      <option value="180">3 hour</option>
-      <option value="1440">1 day</option>
-      <option value="4320">3 day</option>
-      <option value="10080">1 week</option>
-      <option value="43200">1 month</option>
-    </select>
-  </div>
-
+  <div class="price">$<span id="unitUsd">…</span></div>
+  <div class="row">Gold TWAP: <span id="goldTwap">…</span></div>
+  <div class="row">100 Units: <span id="hundredUsd">…</span></div>
+  <div class="row">Updated: <span id="timestamp">…</span></div>
   <div id="fxContainer"></div>
 </div>
 
 <div id="chart"></div>
 
 <div class="footnote">
-<b>Methodology:</b> 40% gold anchor, 12% each BRL / RUB / INR / CNY / ZAR.<br>
-Server-side OHLC only. Non-sovereign, non-redeemable reference index.
+Integrity manifest: <a href="/meta.json" target="_blank">/meta.json</a>
+</div>
 </div>
 
-</div>
-
-<!-- ================= SCRIPT ================= -->
 <script type="module">
-/* ===== IMPORT OFFICIAL LIGHTWEIGHT CHARTS (ESM) ===== */
-import {
-  createChart
-} from "https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.esm.production.js";
+import { createChart } from "/lightweight-charts.esm.js";
 
-/* ================= CONFIG ================= */
+const FX_LIST=["BRL","RUB","INR","CNY","ZAR"];
+const FX_WEIGHT=0.12;
+const GOLD_G_PER_OZ=31.1034768;
+const UNIT_BASE_GOLD_G=0.9823;
 
-const FEED_URL = "/latest.json";
-const OHLC_URL = "/ohlc";
-
-const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
-const FX_WEIGHT = 0.12;
-
-const GOLD_G_PER_OZ = 31.1034768;
-const UNIT_BASE_GOLD_G = 0.9823;
-
-const UPDATE_MS = 1000;
-
-/* ================= CHART ================= */
-
-const chart = createChart(
-  document.getElementById("chart"),
-  {
-    layout: { background:{color:"#0b0f14"}, textColor:"#ffd700" },
-    grid: {
-      vertLines:{color:"#333"},
-      horzLines:{color:"#333"}
-    },
-    timeScale:{ timeVisible:true, secondsVisible:true }
-  }
-);
-
-const candleSeries = chart.addCandlestickSeries({
-  upColor:"#ffd700",
-  downColor:"#ff4b4b",
-  wickUpColor:"#ffd700",
-  wickDownColor:"#ff4b4b",
-  borderVisible:false
+const chart=createChart(document.getElementById("chart"),{
+  layout:{background:{color:"#0b0f14"},textColor:"#ffd700"},
+  timeScale:{timeVisible:true,secondsVisible:true}
 });
 
-/* ================= FX ROWS ================= */
+const candleSeries=chart.addCandlestickSeries();
 
-const fxContainer = document.getElementById("fxContainer");
-
-FX_LIST.forEach(ccy=>{
-  const d = document.createElement("div");
-  d.className = "fx-row";
-  d.id = "fx_" + ccy;
-  d.innerHTML = `<div><b>${ccy}</b></div><div>…</div>`;
+const fxContainer=document.getElementById("fxContainer");
+FX_LIST.forEach(c=>{
+  const d=document.createElement("div");
+  d.className="fx-row";
+  d.id="fx_"+c;
+  d.innerHTML=`<div>${c}</div><div>…</div>`;
   fxContainer.appendChild(d);
 });
 
-/* ================= SAFE CANDLE LOADER ================= */
-
-let currentTF = document.getElementById("timeframe").value;
-
 async function loadCandles(){
-  const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
-  const d = await r.json();
-
-  if (!Array.isArray(d) || d.length === 0) return;
-  candleSeries.setData(d);
+  const r=await fetch("/ohlc?timeframe=1&limit=500");
+  const d=await r.json();
+  if(d.length) candleSeries.setData(d);
 }
 
-/* ================= TICK ================= */
-
 async function tick(){
-  const d = await (await fetch(FEED_URL)).json();
+  const d=await (await fetch("/latest.json")).json();
+  unitUsd.textContent=d.unit_usd.toFixed(4);
+  hundredUsd.textContent=(d.unit_usd*100).toFixed(2);
+  goldTwap.textContent=d.gold_usd_per_oz_twap.toFixed(2);
+  timestamp.textContent=d.timestamp_utc;
 
-  unitUsd.textContent = d.unit_usd.toFixed(4);
-  hundredUsd.textContent = (d.unit_usd * 100).toFixed(2);
-  goldTwap.textContent = d.gold_usd_per_oz_twap.toFixed(2);
-  timestamp.textContent =
-    d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
-
-  FX_LIST.forEach(ccy=>{
-    const fx = d.fx_usd_twap?.[ccy];
-    if (!fx) return;
-
-    const goldUSD =
-      UNIT_BASE_GOLD_G *
-      (d.gold_usd_per_oz_twap / GOLD_G_PER_OZ);
-
-    const usdSlice = goldUSD * FX_WEIGHT;
-    const localAmt = usdSlice * fx;
-
-    document.querySelector(`#fx_${ccy} div:last-child`).innerHTML =
-      `$${usdSlice.toFixed(2)} | ${localAmt.toFixed(2)} ${ccy}`;
+  FX_LIST.forEach(c=>{
+    const fx=d.fx_usd_twap[c];
+    const usd=(UNIT_BASE_GOLD_G*(d.gold_usd_per_oz_twap/GOLD_G_PER_OZ))*FX_WEIGHT;
+    document.querySelector("#fx_"+c+" div:last-child").textContent=
+      `$${usd.toFixed(2)} | ${(usd*fx).toFixed(2)} ${c}`;
   });
 }
 
-/* ================= EVENTS ================= */
-
-document.getElementById("timeframe").onchange = e => {
-  currentTF = e.target.value;
-  loadCandles();
-};
-
-/* ================= INIT ================= */
-
 loadCandles();
 tick();
-setInterval(tick, UPDATE_MS);
-
+setInterval(tick,1000);
 </script>
 </body>
 </html>
-
