@@ -15,6 +15,7 @@
   }
   .container { max-width:960px; margin:auto; }
   h1 { text-align:center; margin-bottom:10px; }
+
   .price-box {
     background:#151a21;
     padding:20px;
@@ -27,11 +28,13 @@
     margin-bottom:10px;
   }
   .row { margin:4px 0; font-size:1.05em; }
+
   #chart {
     height:420px;
     background:#0b0f14;
     border-radius:8px;
   }
+
   select {
     background:#151a21;
     color:#ffd700;
@@ -39,6 +42,7 @@
     padding:4px;
     margin-left:5px;
   }
+
   .fx-row {
     display:flex;
     justify-content:space-between;
@@ -48,6 +52,7 @@
     margin:3px 0;
     font-size:.95em;
   }
+
   .footnote {
     font-size:.85em;
     color:#aaa;
@@ -63,14 +68,13 @@
 <h1>BRICS Unit Basket v1</h1>
 
 <div class="price-box">
-
   <div class="price">
     Reference Price (USD):
     <strong><span id="unitUsd">…</span></strong>
   </div>
 
   <div class="row">Gold TWAP (USD / oz): <span id="goldTwap">…</span></div>
-  <div class="row">Gold per Unit (grams): <span id="unitGold">0.982300</span></div>
+  <div class="row">Gold per Unit (grams): 0.982300</div>
   <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
   <div class="row">Last Update (UTC): <span id="timestamp">…</span></div>
 
@@ -96,25 +100,26 @@
 
 <div class="footnote">
 <b>Methodology:</b> 40% gold anchor, 12% each BRL / RUB / INR / CNY / ZAR.<br>
-FX rows reflect genesis-normalized TWAP contribution. This index is non-sovereign and non-redeemable.
+Server-side OHLC only. Non-sovereign, non-redeemable reference index.
 </div>
 
 </div>
 
 <script>
-/* ================= CONSTANTS ================= */
+/* ================= CONFIG ================= */
 
 const FEED_URL = "/latest.json";
 const OHLC_URL = "/ohlc";
 
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 const FX_WEIGHT = 0.12;
+
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD_G = 0.9823;
 
 const UPDATE_MS = 1000;
 
-/* ================= CHART ================= */
+/* ================= CHART (CREATE ONCE) ================= */
 
 const chart = LightweightCharts.createChart(
   document.getElementById("chart"),
@@ -140,6 +145,7 @@ const candleSeries = chart.addSeries({
 /* ================= FX ROWS ================= */
 
 const fxContainer = document.getElementById("fxContainer");
+
 FX_LIST.forEach(ccy=>{
   const d = document.createElement("div");
   d.className = "fx-row";
@@ -148,14 +154,24 @@ FX_LIST.forEach(ccy=>{
   fxContainer.appendChild(d);
 });
 
-/* ================= DATA ================= */
+/* ================= SAFE CANDLE LOADER ================= */
 
 let currentTF = document.getElementById("timeframe").value;
 
 async function loadCandles(){
-  const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
-  const d = await r.json();
-  candleSeries.setData(d);
+  try {
+    const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
+    const d = await r.json();
+
+    // ---- CRITICAL SAFETY GUARDS ----
+    if (!Array.isArray(d)) return;
+    if (d.length === 0) return;
+
+    candleSeries.setData(d);
+
+  } catch (e) {
+    console.error("OHLC load error:", e);
+  }
 }
 
 /* ================= TICK ================= */
@@ -176,12 +192,10 @@ async function tick(){
     document.getElementById("timestamp").textContent =
       d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-    /* ---- FX contribution rows ---- */
     FX_LIST.forEach(ccy=>{
       const fx = d.fx_usd_twap?.[ccy];
       if (!fx) return;
 
-      // FX USD slice = gold_value_usd * FX_WEIGHT * (FX / FX_genesis)
       const goldUSD =
         UNIT_BASE_GOLD_G *
         (d.gold_usd_per_oz_twap / GOLD_G_PER_OZ);
