@@ -86,14 +86,11 @@ const UPDATE_MS = 1000;
 
 /* ================= CHART ================= */
 
-const chart = LightweightCharts.createChart(
-  document.getElementById("chart"),
-  {
-    layout:{ background:{color:"#0b0f14"}, textColor:"#ffd700" },
-    grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
-    timeScale:{ timeVisible:true, secondsVisible:true }
-  }
-);
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  layout: { background: { color: "#0b0f14" }, textColor: "#ffd700" },
+  grid: { vertLines: { color: "#333" }, horzLines: { color: "#333" } },
+  timeScale: { timeVisible: true, secondsVisible: true }
+});
 
 chart.addSeries({
   type: "Candlestick",
