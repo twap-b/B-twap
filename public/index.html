@@ -1,187 +1,216 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>BRICS Unit Basket v1 – TWAP + Candles</title>
+<meta charset="UTF-8" />
+<title>BRICS Unit Basket v1 – Live Reference Index</title>
 
-  <style>
-    body { background:#0b0f14; color:#ffd700; font-family:Arial,sans-serif; padding:20px; }
-    .container { max-width:950px; margin:auto; }
-    h1 { text-align:center; color:#ffd700; }
-    .price-box { background:#151a21; padding:20px; border-radius:8px; margin-bottom:20px; }
-    .price-box .price { font-size:2em; text-align:center; margin:10px 0; }
-    .row { margin:5px 0; font-size:1.1em; }
-    #chart { height:400px; margin-top:20px; background:#0b0f14; border-radius:8px; }
-    select { margin-top:10px; padding:5px; font-size:1em; background:#151a21; color:#ffd700; border:1px solid #333; }
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 
-    .fx-row {
-      display:flex;
-      justify-content:space-between;
-      background:#1a1f28;
-      padding:6px 10px;
-      border-radius:4px;
-      margin:3px 0;
-      font-size:0.95em;
-    }
-
-    .fx-left { font-weight:bold; }
-    .fx-right { text-align:right; }
-
-    .footnote { font-size:.85em; color:#aaa; margin-top:20px; line-height:1.4; }
-  </style>
+<style>
+  body {
+    background:#0b0f14;
+    color:#ffd700;
+    font-family:Arial,sans-serif;
+    padding:20px;
+  }
+  .container { max-width:960px; margin:auto; }
+  h1 { text-align:center; margin-bottom:10px; }
+  .price-box {
+    background:#151a21;
+    padding:20px;
+    border-radius:8px;
+    margin-bottom:20px;
+  }
+  .price {
+    font-size:2em;
+    text-align:center;
+    margin-bottom:10px;
+  }
+  .row { margin:4px 0; font-size:1.05em; }
+  #chart {
+    height:420px;
+    background:#0b0f14;
+    border-radius:8px;
+  }
+  select {
+    background:#151a21;
+    color:#ffd700;
+    border:1px solid #333;
+    padding:4px;
+    margin-left:5px;
+  }
+  .fx-row {
+    display:flex;
+    justify-content:space-between;
+    background:#1a1f28;
+    padding:6px 10px;
+    border-radius:4px;
+    margin:3px 0;
+    font-size:.95em;
+  }
+  .footnote {
+    font-size:.85em;
+    color:#aaa;
+    margin-top:15px;
+    line-height:1.4;
+  }
+</style>
 </head>
 
 <body>
 <div class="container">
-  <h1>BRICS Unit Basket v1 – Live TWAP + Candles</h1>
 
-  <div class="price-box">
-    <div class="price">
-      Reference Price (USD): <strong><span id="unitUsd">…</span></strong>
-    </div>
+<h1>BRICS Unit Basket v1</h1>
 
-    <div class="row">Gold TWAP (USD / oz): <span id="goldTwap">…</span></div>
-    <div class="row">Unit (grams gold): <span id="unitGold">…</span></div>
-    <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
-    <div class="row">Last Update (UTC): <span id="timestamp">…</span></div>
+<div class="price-box">
 
-    <div class="row">
-      Timeframe:
-      <select id="timeframe">
-        <option value="1">1 min</option>
-        <option value="15">15 min</option>
-        <option value="30">30 min</option>
-        <option value="60">1 hour</option>
-        <option value="180">3 hour</option>
-        <option value="1440">1 day</option>
-        <option value="4320">3 day</option>
-        <option value="10080">1 week</option>
-        <option value="43200">1 month</option>
-      </select>
-    </div>
-
-    <div id="fxContainer"></div>
+  <div class="price">
+    Reference Price (USD):
+    <strong><span id="unitUsd">…</span></strong>
   </div>
 
-  <div id="chart"></div>
+  <div class="row">Gold TWAP (USD / oz): <span id="goldTwap">…</span></div>
+  <div class="row">Gold per Unit (grams): <span id="unitGold">0.982300</span></div>
+  <div class="row">100 Units (USD): <span id="hundredUsd">…</span></div>
+  <div class="row">Last Update (UTC): <span id="timestamp">…</span></div>
 
-  <div class="footnote">
-    <b>Methodology:</b> 40% gold, 12% each BRL / RUB / INR / CNY / ZAR.<br>
-    FX rows show the USD slice and its local-currency equivalent.
+  <div class="row">
+    Timeframe:
+    <select id="timeframe">
+      <option value="1">1 min</option>
+      <option value="15">15 min</option>
+      <option value="30">30 min</option>
+      <option value="60">1 hour</option>
+      <option value="180">3 hour</option>
+      <option value="1440">1 day</option>
+      <option value="4320">3 day</option>
+      <option value="10080">1 week</option>
+      <option value="43200">1 month</option>
+    </select>
   </div>
+
+  <div id="fxContainer"></div>
 </div>
 
-<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+<div id="chart"></div>
+
+<div class="footnote">
+<b>Methodology:</b> 40% gold anchor, 12% each BRL / RUB / INR / CNY / ZAR.<br>
+FX rows reflect genesis-normalized TWAP contribution. This index is non-sovereign and non-redeemable.
+</div>
+
+</div>
 
 <script>
-/* ================= CONFIG ================= */
+/* ================= CONSTANTS ================= */
 
-// If frontend is on same server, keep ""
-// If on GitHub Pages, set full Render URL
 const FEED_URL = "/latest.json";
+const OHLC_URL = "/ohlc";
 
-const FX_LIST   = ["BRL","RUB","INR","CNY","ZAR"];
+const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 const FX_WEIGHT = 0.12;
+const GOLD_G_PER_OZ = 31.1034768;
+const UNIT_BASE_GOLD_G = 0.9823;
+
 const UPDATE_MS = 1000;
 
 /* ================= CHART ================= */
 
-const chart = LightweightCharts.createChart(document.getElementById("chart"), {
-  layout: { background: { color: "#0b0f14" }, textColor: "#ffd700" },
-  grid: { vertLines: { color: "#333" }, horzLines: { color: "#333" } },
-  timeScale: { timeVisible: true, secondsVisible: true }
-});
+const chart = LightweightCharts.createChart(
+  document.getElementById("chart"),
+  {
+    layout: { background:{color:"#0b0f14"}, textColor:"#ffd700" },
+    grid: {
+      vertLines:{color:"#333"},
+      horzLines:{color:"#333"}
+    },
+    timeScale:{ timeVisible:true, secondsVisible:true }
+  }
+);
 
-chart.addSeries({
-  type: "Candlestick",
-  upColor: "#ffd700",
-  downColor: "#ff4b4b",
-  wickUpColor: "#ffd700",
-  wickDownColor: "#ff4b4b",
-  borderVisible: false
+const candleSeries = chart.addSeries({
+  type:"Candlestick",
+  upColor:"#ffd700",
+  downColor:"#ff4b4b",
+  wickUpColor:"#ffd700",
+  wickDownColor:"#ff4b4b",
+  borderVisible:false
 });
 
 /* ================= FX ROWS ================= */
 
 const fxContainer = document.getElementById("fxContainer");
-
 FX_LIST.forEach(ccy=>{
   const d = document.createElement("div");
   d.className = "fx-row";
   d.id = "fx_" + ccy;
-  d.innerHTML = `
-    <div class="fx-left">${ccy}</div>
-    <div class="fx-right">…</div>
-  `;
+  d.innerHTML = `<div><b>${ccy}</b></div><div>…</div>`;
   fxContainer.appendChild(d);
 });
 
-/* ================= CANDLES ================= */
+/* ================= DATA ================= */
 
-function candleTime(tsSec, tfMin) {
-  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
+let currentTF = document.getElementById("timeframe").value;
+
+async function loadCandles(){
+  const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
+  const d = await r.json();
+  candleSeries.setData(d);
 }
-
-let candles = [];
-let current = null;
-let tf = parseInt(document.getElementById("timeframe").value);
 
 /* ================= TICK ================= */
 
 async function tick(){
   try {
     const d = await (await fetch(FEED_URL)).json();
-    const unitUSD = d.unit_usd;
 
-    document.getElementById("unitUsd").textContent     = unitUSD.toFixed(2);
-    document.getElementById("unitGold").textContent    = d.unit_gold_grams.toFixed(6);
-    document.getElementById("hundredUsd").textContent  = d.hundred_units_usd.toFixed(2);
-    document.getElementById("goldTwap").textContent    = d.gold_usd_per_oz_twap.toFixed(2);
-    document.getElementById("timestamp").textContent   =
+    document.getElementById("unitUsd").textContent =
+      d.unit_usd.toFixed(4);
+
+    document.getElementById("hundredUsd").textContent =
+      (d.unit_usd * 100).toFixed(2);
+
+    document.getElementById("goldTwap").textContent =
+      d.gold_usd_per_oz_twap.toFixed(2);
+
+    document.getElementById("timestamp").textContent =
       d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-    /* ---- FX Display ---- */
-    if (d.fx_usd_twap) {
-      FX_LIST.forEach(ccy=>{
-        const fxRate = d.fx_usd_twap[ccy];
-        if (!fxRate) return;
+    /* ---- FX contribution rows ---- */
+    FX_LIST.forEach(ccy=>{
+      const fx = d.fx_usd_twap?.[ccy];
+      if (!fx) return;
 
-        const usdShare = unitUSD * FX_WEIGHT;
-        const fxAmount = usdShare * fxRate;
+      // FX USD slice = gold_value_usd * FX_WEIGHT * (FX / FX_genesis)
+      const goldUSD =
+        UNIT_BASE_GOLD_G *
+        (d.gold_usd_per_oz_twap / GOLD_G_PER_OZ);
 
-        document.querySelector(`#fx_${ccy} .fx-right`).innerHTML =
-          `$${usdShare.toFixed(2)} | ${fxAmount.toFixed(2)} ${ccy}`;
-      });
-    }
+      const usdSlice = goldUSD * FX_WEIGHT;
+      const localAmt = usdSlice * fx;
 
-    /* ---- Candle update ---- */
-    const nowSec = Math.floor(Date.now()/1000);
-    const t = candleTime(nowSec, tf);
-
-    if (!current || current.time !== t) {
-      if (current) candles.push(current);
-      current = { time:t, open:unitUSD, high:unitUSD, low:unitUSD, close:unitUSD };
-      candleSeries.setData(candles.concat([current]));
-    } else {
-      current.high  = Math.max(current.high, unitUSD);
-      current.low   = Math.min(current.low, unitUSD);
-      current.close = unitUSD;
-      candleSeries.update(current);
-    }
+      document.querySelector(`#fx_${ccy} div:last-child`).innerHTML =
+        `$${usdSlice.toFixed(2)} | ${localAmt.toFixed(2)} ${ccy}`;
+    });
 
   } catch(e) {
-    console.error("Tick error:", e);
+    console.error("tick error:", e);
   }
 }
 
+/* ================= EVENTS ================= */
+
+document.getElementById("timeframe").onchange = e => {
+  currentTF = e.target.value;
+  loadCandles();
+};
+
+/* ================= INIT ================= */
+
+loadCandles();
 tick();
 setInterval(tick, UPDATE_MS);
 
-document.getElementById("timeframe").onchange = e => {
-  tf = parseInt(e.target.value);
-  candles = [];
-  current = null;
-};
 </script>
 </body>
 </html>
