@@ -4,7 +4,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
-// ===== Environment guard =====
+/* ================= ENV GUARD ================= */
+
 if (typeof fetch !== "function") {
   throw new Error("Native fetch not available — Node 18+ required");
 }
@@ -16,21 +17,42 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// ===== Load frozen genesis =====
+/* ================= HELPERS ================= */
+
+function sha256File(filePath) {
+  return crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(filePath))
+    .digest("hex");
+}
+
+function candleTime(tsSec, tfMin) {
+  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
+}
+
+function store(history, value, windowMs) {
+  const now = Date.now();
+  history.push({ t: now, v: value });
+  return history.filter(p => now - p.t <= windowMs);
+}
+
+function twap(history) {
+  if (!history.length) return 0;
+  return history.reduce((s, p) => s + p.v, 0) / history.length;
+}
+
+/* ================= GENESIS ================= */
+
 const GENESIS_PATH = path.resolve(process.cwd(), "genesis.json");
 if (!fs.existsSync(GENESIS_PATH)) {
   throw new Error("genesis.json not found at project root");
 }
+
 const genesis = JSON.parse(fs.readFileSync(GENESIS_PATH, "utf8"));
+const genesisHash = sha256File(GENESIS_PATH);
 
-// ===== Genesis checksum =====
-const genesisHash = crypto
-  .createHash("sha256")
-  .update(JSON.stringify(genesis))
-  .digest("hex");
-console.log("Genesis FX SHA256:", genesisHash);
+/* ================= CONSTANTS ================= */
 
-// ===== Constants =====
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD_G = 0.9823;
 
@@ -39,31 +61,16 @@ const FX_WEIGHT = 0.12;
 const FX_LIST = ["BRL", "RUB", "INR", "CNY", "ZAR"];
 const TWAP_WINDOW_MS = 5000;
 
-// ===== TWAP Storage =====
+/* ================= STORAGE ================= */
+
 let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(c => (fxHistory[c] = []));
 
-// ===== OHLC Storage =====
-const candles = {}; // { timeframe: [ {time,open,high,low,close} ] }
+const candles = {};
 
-// ===== Helpers =====
-function store(history, value) {
-  const now = Date.now();
-  history.push({ t: now, v: value });
-  return history.filter(p => now - p.t <= TWAP_WINDOW_MS);
-}
+/* ================= MARKET FETCH ================= */
 
-function twap(history) {
-  if (!history.length) return 0;
-  return history.reduce((s, p) => s + p.v, 0) / history.length;
-}
-
-function candleTime(tsSec, tfMin) {
-  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
-}
-
-// ===== Market Fetch =====
 async function fetchGold() {
   const r = await fetch("https://api.metals.live/v1/spot/gold");
   const j = await r.json();
@@ -79,12 +86,13 @@ async function fetchFX() {
   return j.rates;
 }
 
-// ===== Core Computation (white-paper correct) =====
+/* ================= CORE COMPUTATION ================= */
+
 async function computeUnit() {
   const goldSpot = await fetchGold();
   const fxSpot = await fetchFX();
 
-  goldHistory = store(goldHistory, goldSpot);
+  goldHistory = store(goldHistory, goldSpot, TWAP_WINDOW_MS);
   const goldTWAP = twap(goldHistory);
 
   let ci = 0;
@@ -92,29 +100,21 @@ async function computeUnit() {
 
   FX_LIST.forEach(c => {
     if (!fxSpot[c]) return;
-    fxHistory[c] = store(fxHistory[c], fxSpot[c]);
+    fxHistory[c] = store(fxHistory[c], fxSpot[c], TWAP_WINDOW_MS);
     const fxt = twap(fxHistory[c]);
     fxTWAP[c] = fxt;
     ci += FX_WEIGHT * (fxt / genesis[c]);
   });
 
-  // ---- fixed gold anchor ----
-  const goldUSD =
-    UNIT_BASE_GOLD_G * (goldTWAP / GOLD_G_PER_OZ);
+  const basketIndex = GOLD_WEIGHT + ci;
+  const unitGoldG = UNIT_BASE_GOLD_G * basketIndex;
+  const unitUSD = unitGoldG * (goldTWAP / GOLD_G_PER_OZ);
 
-  const unitUSD =
-    goldUSD * GOLD_WEIGHT +
-    goldUSD * ci;
-
-  return {
-    goldTWAP,
-    unitGoldG: UNIT_BASE_GOLD_G,
-    unitUSD,
-    fxTWAP
-  };
+  return { goldTWAP, unitGoldG, unitUSD, fxTWAP };
 }
 
-// ===== Routes =====
+/* ================= ROUTES ================= */
+
 app.get("/latest.json", async (_, res) => {
   try {
     const d = await computeUnit();
@@ -156,26 +156,52 @@ app.get("/latest.json", async (_, res) => {
   }
 });
 
-// ===== OHLC (assertion-safe) =====
 app.get("/ohlc", (req, res) => {
   const tf = parseInt(req.query.timeframe || "1");
   const limit = parseInt(req.query.limit || "1000");
-
   candles[tf] ||= [];
-
-  const clean = candles[tf]
-    .filter(c =>
-      Number.isFinite(c.time) &&
-      Number.isFinite(c.open) &&
-      Number.isFinite(c.high) &&
-      Number.isFinite(c.low) &&
-      Number.isFinite(c.close)
-    )
-    .sort((a, b) => a.time - b.time)
-    .slice(-limit);
-
-  res.json(clean);
+  res.json(candles[tf].slice(-limit));
 });
+
+/* ================= META ================= */
+
+const META = {
+  index: "BRICS Unit Basket v1",
+  published_utc: "2026-01-25T00:00:00Z",
+  integrity: {
+    genesis_fx: {
+      file: "genesis.json",
+      sha256: genesisHash
+    },
+    backend: {
+      file: "server.js",
+      sha256: sha256File(path.resolve(process.cwd(), "server.js"))
+    },
+    frontend: {
+      html: {
+        file: "public/index.html",
+        sha256: sha256File(path.join("public", "index.html"))
+      },
+      chart_library: {
+        name: "lightweight-charts",
+        version: "5.0.0",
+        file: "public/lightweight-charts.esm.js",
+        sha256: sha256File(
+          path.join("public", "lightweight-charts.esm.js")
+        )
+      }
+    }
+  }
+};
+
+META.integrity.manifest_sha256 = crypto
+  .createHash("sha256")
+  .update(JSON.stringify(META))
+  .digest("hex");
+
+app.get("/meta.json", (_, res) => res.json(META));
+
+/* ================= START ================= */
 
 app.listen(PORT, () =>
   console.log(`BRICS Unit Basket v1 running on port ${PORT}`)
