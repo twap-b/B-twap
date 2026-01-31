@@ -95,12 +95,13 @@ const chart = LightweightCharts.createChart(
   }
 );
 
-const candleSeries = chart.addCandlestickSeries({
-  upColor:"#ffd700",
-  downColor:"#ff4b4b",
-  wickUpColor:"#ffd700",
-  wickDownColor:"#ff4b4b",
-  borderVisible:false
+const candleSeries = chart.addSeries({
+  type: "Candlestick",
+  upColor: "#ffd700",
+  downColor: "#ff4b4b",
+  wickUpColor: "#ffd700",
+  wickDownColor: "#ff4b4b",
+  borderVisible: false
 });
 
 /* ================= FX ROWS ================= */
