@@ -4,9 +4,6 @@
 <meta charset="UTF-8" />
 <title>BRICS Unit Basket v1 – Live Reference Index</title>
 
-<!-- ✅ PINNED V4 STANDALONE -->
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-
 <style>
   body {
     background:#0b0f14;
@@ -16,6 +13,7 @@
   }
   .container { max-width:960px; margin:auto; }
   h1 { text-align:center; margin-bottom:10px; }
+
   .price-box {
     background:#151a21;
     padding:20px;
@@ -28,11 +26,13 @@
     margin-bottom:10px;
   }
   .row { margin:4px 0; font-size:1.05em; }
+
   #chart {
     height:420px;
     background:#0b0f14;
     border-radius:8px;
   }
+
   select {
     background:#151a21;
     color:#ffd700;
@@ -40,6 +40,7 @@
     padding:4px;
     margin-left:5px;
   }
+
   .fx-row {
     display:flex;
     justify-content:space-between;
@@ -48,6 +49,13 @@
     border-radius:4px;
     margin:3px 0;
     font-size:.95em;
+  }
+
+  .footnote {
+    font-size:.85em;
+    color:#aaa;
+    margin-top:15px;
+    line-height:1.4;
   }
 </style>
 </head>
@@ -77,6 +85,9 @@
       <option value="60">1 hour</option>
       <option value="180">3 hour</option>
       <option value="1440">1 day</option>
+      <option value="4320">3 day</option>
+      <option value="10080">1 week</option>
+      <option value="43200">1 month</option>
     </select>
   </div>
 
@@ -85,30 +96,48 @@
 
 <div id="chart"></div>
 
+<div class="footnote">
+<b>Methodology:</b> 40% gold anchor, 12% each BRL / RUB / INR / CNY / ZAR.<br>
+Server-side OHLC only. Non-sovereign, non-redeemable reference index.
 </div>
 
-<script>
+</div>
+
+<!-- ================= SCRIPT ================= -->
+<script type="module">
+/* ===== IMPORT OFFICIAL LIGHTWEIGHT CHARTS (ESM) ===== */
+import {
+  createChart
+} from "https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.esm.production.js";
+
+/* ================= CONFIG ================= */
+
 const FEED_URL = "/latest.json";
 const OHLC_URL = "/ohlc";
 
 const FX_LIST = ["BRL","RUB","INR","CNY","ZAR"];
 const FX_WEIGHT = 0.12;
+
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD_G = 0.9823;
 
-/* ===== CHART ===== */
+const UPDATE_MS = 1000;
 
-const chart = LightweightCharts.createChart(
+/* ================= CHART ================= */
+
+const chart = createChart(
   document.getElementById("chart"),
   {
-    layout:{ background:{color:"#0b0f14"}, textColor:"#ffd700" },
-    grid:{ vertLines:{color:"#333"}, horzLines:{color:"#333"} },
+    layout: { background:{color:"#0b0f14"}, textColor:"#ffd700" },
+    grid: {
+      vertLines:{color:"#333"},
+      horzLines:{color:"#333"}
+    },
     timeScale:{ timeVisible:true, secondsVisible:true }
   }
 );
 
-const candleSeries = chart.addSeries({
-  type:"Candlestick",
+const candleSeries = chart.addCandlestickSeries({
   upColor:"#ffd700",
   downColor:"#ff4b4b",
   wickUpColor:"#ffd700",
@@ -116,35 +145,37 @@ const candleSeries = chart.addSeries({
   borderVisible:false
 });
 
-/* ===== FX ROWS ===== */
+/* ================= FX ROWS ================= */
 
 const fxContainer = document.getElementById("fxContainer");
+
 FX_LIST.forEach(ccy=>{
   const d = document.createElement("div");
   d.className = "fx-row";
-  d.id = "fx_"+ccy;
+  d.id = "fx_" + ccy;
   d.innerHTML = `<div><b>${ccy}</b></div><div>…</div>`;
   fxContainer.appendChild(d);
 });
 
-/* ===== CANDLES ===== */
+/* ================= SAFE CANDLE LOADER ================= */
 
-let tf = document.getElementById("timeframe").value;
+let currentTF = document.getElementById("timeframe").value;
 
 async function loadCandles(){
-  const r = await fetch(`${OHLC_URL}?timeframe=${tf}&limit=1000`);
+  const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
   const d = await r.json();
+
   if (!Array.isArray(d) || d.length === 0) return;
   candleSeries.setData(d);
 }
 
-/* ===== TICK ===== */
+/* ================= TICK ================= */
 
 async function tick(){
   const d = await (await fetch(FEED_URL)).json();
 
   unitUsd.textContent = d.unit_usd.toFixed(4);
-  hundredUsd.textContent = (d.unit_usd*100).toFixed(2);
+  hundredUsd.textContent = (d.unit_usd * 100).toFixed(2);
   goldTwap.textContent = d.gold_usd_per_oz_twap.toFixed(2);
   timestamp.textContent =
     d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
@@ -165,14 +196,20 @@ async function tick(){
   });
 }
 
-loadCandles();
-tick();
-setInterval(tick, 1000);
+/* ================= EVENTS ================= */
 
-timeframe.onchange = e => {
-  tf = e.target.value;
+document.getElementById("timeframe").onchange = e => {
+  currentTF = e.target.value;
   loadCandles();
 };
+
+/* ================= INIT ================= */
+
+loadCandles();
+tick();
+setInterval(tick, UPDATE_MS);
+
 </script>
 </body>
 </html>
+
