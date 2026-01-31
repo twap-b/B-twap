@@ -149,12 +149,14 @@
       }
     });
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: "#ffd700",
-      downColor: "#ff4b4b",
-      borderVisible: false,
-      wickColor: "#eee"
-    });
+    const candleSeries = chart.addSeries({
+  type: "Candlestick",
+  upColor: "#ffd700",
+  downColor: "#ff4b4b",
+  wickUpColor: "#ffd700",
+  wickDownColor: "#ff4b4b",
+  borderVisible: false
+});
 
     let timeframeMin = parseInt(document.getElementById("timeframe").value);
     let candles = [];
