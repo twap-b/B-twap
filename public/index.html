@@ -119,7 +119,7 @@ const UNIT_BASE_GOLD_G = 0.9823;
 
 const UPDATE_MS = 1000;
 
-/* ================= CHART (CREATE ONCE) ================= */
+/* ================= CHART (V5-CORRECT API) ================= */
 
 const chart = LightweightCharts.createChart(
   document.getElementById("chart"),
@@ -133,8 +133,8 @@ const chart = LightweightCharts.createChart(
   }
 );
 
-const candleSeries = chart.addSeries({
-  type:"Candlestick",
+// ✅ THIS IS THE KEY FIX
+const candleSeries = chart.addCandlestickSeries({
   upColor:"#ffd700",
   downColor:"#ff4b4b",
   wickUpColor:"#ffd700",
@@ -159,65 +159,44 @@ FX_LIST.forEach(ccy=>{
 let currentTF = document.getElementById("timeframe").value;
 
 async function loadCandles(){
-  try {
-    const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
-    const d = await r.json();
-
-    // ---- CRITICAL SAFETY GUARDS ----
-    if (!Array.isArray(d)) return;
-    if (d.length === 0) return;
-
-    candleSeries.setData(d);
-
-  } catch (e) {
-    console.error("OHLC load error:", e);
-  }
+  const r = await fetch(`${OHLC_URL}?timeframe=${currentTF}&limit=1000`);
+  const d = await r.json();
+  if (!Array.isArray(d) || d.length === 0) return;
+  candleSeries.setData(d);
 }
 
 /* ================= TICK ================= */
 
 async function tick(){
-  try {
-    const d = await (await fetch(FEED_URL)).json();
+  const d = await (await fetch(FEED_URL)).json();
 
-    document.getElementById("unitUsd").textContent =
-      d.unit_usd.toFixed(4);
+  document.getElementById("unitUsd").textContent =
+    d.unit_usd.toFixed(4);
 
-    document.getElementById("hundredUsd").textContent =
-      (d.unit_usd * 100).toFixed(2);
+  document.getElementById("hundredUsd").textContent =
+    (d.unit_usd * 100).toFixed(2);
 
-    document.getElementById("goldTwap").textContent =
-      d.gold_usd_per_oz_twap.toFixed(2);
+  document.getElementById("goldTwap").textContent =
+    d.gold_usd_per_oz_twap.toFixed(2);
 
-    document.getElementById("timestamp").textContent =
-      d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
+  document.getElementById("timestamp").textContent =
+    d.timestamp_utc.replace("T"," ").replace("Z"," UTC");
 
-    FX_LIST.forEach(ccy=>{
-      const fx = d.fx_usd_twap?.[ccy];
-      if (!fx) return;
+  FX_LIST.forEach(ccy=>{
+    const fx = d.fx_usd_twap?.[ccy];
+    if (!fx) return;
 
-      const goldUSD =
-        UNIT_BASE_GOLD_G *
-        (d.gold_usd_per_oz_twap / GOLD_G_PER_OZ);
+    const goldUSD =
+      UNIT_BASE_GOLD_G *
+      (d.gold_usd_per_oz_twap / GOLD_G_PER_OZ);
 
-      const usdSlice = goldUSD * FX_WEIGHT;
-      const localAmt = usdSlice * fx;
+    const usdSlice = goldUSD * FX_WEIGHT;
+    const localAmt = usdSlice * fx;
 
-      document.querySelector(`#fx_${ccy} div:last-child`).innerHTML =
-        `$${usdSlice.toFixed(2)} | ${localAmt.toFixed(2)} ${ccy}`;
-    });
-
-  } catch(e) {
-    console.error("tick error:", e);
-  }
+    document.querySelector(`#fx_${ccy} div:last-child`).innerHTML =
+      `$${usdSlice.toFixed(2)} | ${localAmt.toFixed(2)} ${ccy}`;
+  });
 }
-
-/* ================= EVENTS ================= */
-
-document.getElementById("timeframe").onchange = e => {
-  currentTF = e.target.value;
-  loadCandles();
-};
 
 /* ================= INIT ================= */
 
@@ -225,6 +204,10 @@ loadCandles();
 tick();
 setInterval(tick, UPDATE_MS);
 
+document.getElementById("timeframe").onchange = e => {
+  currentTF = e.target.value;
+  loadCandles();
+};
 </script>
 </body>
 </html>
