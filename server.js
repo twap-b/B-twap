@@ -14,25 +14,20 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-
-// ===== Optional: serve frontend if using same server =====
 app.use(express.static("public"));
 
-// ===== Load frozen genesis (Render-safe) =====
+// ===== Load frozen genesis =====
 const GENESIS_PATH = path.resolve(process.cwd(), "genesis.json");
-
 if (!fs.existsSync(GENESIS_PATH)) {
   throw new Error("genesis.json not found at project root");
 }
-
 const genesis = JSON.parse(fs.readFileSync(GENESIS_PATH, "utf8"));
 
-// ===== Genesis checksum (auditable) =====
+// ===== Genesis checksum =====
 const genesisHash = crypto
   .createHash("sha256")
   .update(JSON.stringify(genesis))
   .digest("hex");
-
 console.log("Genesis FX SHA256:", genesisHash);
 
 // ===== Constants =====
@@ -84,7 +79,7 @@ async function fetchFX() {
   return j.rates;
 }
 
-// ===== Core Computation =====
+// ===== Core Computation (white-paper correct) =====
 async function computeUnit() {
   const goldSpot = await fetchGold();
   const fxSpot = await fetchFX();
@@ -97,18 +92,26 @@ async function computeUnit() {
 
   FX_LIST.forEach(c => {
     if (!fxSpot[c]) return;
-
     fxHistory[c] = store(fxHistory[c], fxSpot[c]);
     const fxt = twap(fxHistory[c]);
     fxTWAP[c] = fxt;
     ci += FX_WEIGHT * (fxt / genesis[c]);
   });
 
-  const basketIndex = GOLD_WEIGHT + ci;
-  const unitGoldG = UNIT_BASE_GOLD_G * basketIndex;
-  const unitUSD = unitGoldG * (goldTWAP / GOLD_G_PER_OZ);
+  // ---- fixed gold anchor ----
+  const goldUSD =
+    UNIT_BASE_GOLD_G * (goldTWAP / GOLD_G_PER_OZ);
 
-  return { goldTWAP, unitGoldG, unitUSD, fxTWAP };
+  const unitUSD =
+    goldUSD * GOLD_WEIGHT +
+    goldUSD * ci;
+
+  return {
+    goldTWAP,
+    unitGoldG: UNIT_BASE_GOLD_G,
+    unitUSD,
+    fxTWAP
+  };
 }
 
 // ===== Routes =====
@@ -118,7 +121,6 @@ app.get("/latest.json", async (_, res) => {
     const ts = Date.now();
     const tsSec = Math.floor(ts / 1000);
 
-    // ---- build candles for all known timeframes ----
     Object.keys(candles).forEach(tf => {
       const t = candleTime(tsSec, tf);
       const arr = candles[tf];
@@ -154,14 +156,25 @@ app.get("/latest.json", async (_, res) => {
   }
 });
 
+// ===== OHLC (assertion-safe) =====
 app.get("/ohlc", (req, res) => {
   const tf = parseInt(req.query.timeframe || "1");
   const limit = parseInt(req.query.limit || "1000");
 
-  // ---- lazy init timeframe ----
   candles[tf] ||= [];
 
-  res.json(candles[tf].slice(-limit));
+  const clean = candles[tf]
+    .filter(c =>
+      Number.isFinite(c.time) &&
+      Number.isFinite(c.open) &&
+      Number.isFinite(c.high) &&
+      Number.isFinite(c.low) &&
+      Number.isFinite(c.close)
+    )
+    .sort((a, b) => a.time - b.time)
+    .slice(-limit);
+
+  res.json(clean);
 });
 
 app.listen(PORT, () =>
