@@ -3,12 +3,46 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import https from "https";
+import { fileURLToPath } from "url";
+
+/* ================= PATH FIX (ESM SAFE) ================= */
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/* ================= FETCH CHART LIB (ONCE) ================= */
+
+const CHART_URL =
+  "https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.esm.production.js";
+
+const CHART_PATH = path.join(__dirname, "public", "lightweight-charts.esm.js");
+
+if (!fs.existsSync(CHART_PATH)) {
+  console.log("Fetching lightweight-charts…");
+
+  fs.mkdirSync(path.dirname(CHART_PATH), { recursive: true });
+
+  https.get(CHART_URL, res => {
+    if (res.statusCode !== 200) {
+      throw new Error("Failed to fetch lightweight-charts");
+    }
+    const file = fs.createWriteStream(CHART_PATH);
+    res.pipe(file);
+    file.on("finish", () => {
+      file.close();
+      console.log("✔ lightweight-charts saved");
+    });
+  });
+}
 
 /* ================= ENV GUARD ================= */
 
 if (typeof fetch !== "function") {
   throw new Error("Native fetch not available — Node 18+ required");
 }
+
+/* ================= APP ================= */
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,39 +51,22 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-/* ================= HELPERS ================= */
-
-function sha256File(filePath) {
-  return crypto
-    .createHash("sha256")
-    .update(fs.readFileSync(filePath))
-    .digest("hex");
-}
-
-function candleTime(tsSec, tfMin) {
-  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
-}
-
-function store(history, value, windowMs) {
-  const now = Date.now();
-  history.push({ t: now, v: value });
-  return history.filter(p => now - p.t <= windowMs);
-}
-
-function twap(history) {
-  if (!history.length) return 0;
-  return history.reduce((s, p) => s + p.v, 0) / history.length;
-}
-
 /* ================= GENESIS ================= */
 
-const GENESIS_PATH = path.resolve(process.cwd(), "genesis.json");
+const GENESIS_PATH = path.join(__dirname, "genesis.json");
+
 if (!fs.existsSync(GENESIS_PATH)) {
   throw new Error("genesis.json not found at project root");
 }
 
 const genesis = JSON.parse(fs.readFileSync(GENESIS_PATH, "utf8"));
-const genesisHash = sha256File(GENESIS_PATH);
+
+const genesisHash = crypto
+  .createHash("sha256")
+  .update(JSON.stringify(genesis))
+  .digest("hex");
+
+console.log("Genesis FX SHA256:", genesisHash);
 
 /* ================= CONSTANTS ================= */
 
@@ -67,7 +84,24 @@ let goldHistory = [];
 let fxHistory = {};
 FX_LIST.forEach(c => (fxHistory[c] = []));
 
-const candles = {};
+const candles = {}; // { timeframe: [ {time,open,high,low,close} ] }
+
+/* ================= HELPERS ================= */
+
+function store(history, value) {
+  const now = Date.now();
+  history.push({ t: now, v: value });
+  return history.filter(p => now - p.t <= TWAP_WINDOW_MS);
+}
+
+function twap(history) {
+  if (!history.length) return 0;
+  return history.reduce((s, p) => s + p.v, 0) / history.length;
+}
+
+function candleTime(tsSec, tfMin) {
+  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
+}
 
 /* ================= MARKET FETCH ================= */
 
@@ -92,7 +126,7 @@ async function computeUnit() {
   const goldSpot = await fetchGold();
   const fxSpot = await fetchFX();
 
-  goldHistory = store(goldHistory, goldSpot, TWAP_WINDOW_MS);
+  goldHistory = store(goldHistory, goldSpot);
   const goldTWAP = twap(goldHistory);
 
   let ci = 0;
@@ -100,7 +134,7 @@ async function computeUnit() {
 
   FX_LIST.forEach(c => {
     if (!fxSpot[c]) return;
-    fxHistory[c] = store(fxHistory[c], fxSpot[c], TWAP_WINDOW_MS);
+    fxHistory[c] = store(fxHistory[c], fxSpot[c]);
     const fxt = twap(fxHistory[c]);
     fxTWAP[c] = fxt;
     ci += FX_WEIGHT * (fxt / genesis[c]);
@@ -162,44 +196,6 @@ app.get("/ohlc", (req, res) => {
   candles[tf] ||= [];
   res.json(candles[tf].slice(-limit));
 });
-
-/* ================= META ================= */
-
-const META = {
-  index: "BRICS Unit Basket v1",
-  published_utc: "2026-01-25T00:00:00Z",
-  integrity: {
-    genesis_fx: {
-      file: "genesis.json",
-      sha256: genesisHash
-    },
-    backend: {
-      file: "server.js",
-      sha256: sha256File(path.resolve(process.cwd(), "server.js"))
-    },
-    frontend: {
-      html: {
-        file: "public/index.html",
-        sha256: sha256File(path.join("public", "index.html"))
-      },
-      chart_library: {
-        name: "lightweight-charts",
-        version: "5.0.0",
-        file: "public/lightweight-charts.esm.js",
-        sha256: sha256File(
-          path.join("public", "lightweight-charts.esm.js")
-        )
-      }
-    }
-  }
-};
-
-META.integrity.manifest_sha256 = crypto
-  .createHash("sha256")
-  .update(JSON.stringify(META))
-  .digest("hex");
-
-app.get("/meta.json", (_, res) => res.json(META));
 
 /* ================= START ================= */
 
