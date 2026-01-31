@@ -1,0 +1,28 @@
+app.get("/meta.json", (_, res) => {
+  const genesisHash = sha256File(GENESIS_PATH);
+  const chartHash   = sha256File(CHART_PATH);
+
+  res.json({
+    index: "BRICS Unit Basket v1",
+    methodology_frozen_utc: "2026-01-25T00:00:00Z",
+
+    hashes: {
+      genesis_json_sha256: genesisHash,
+      lightweight_charts_esm_sha256: chartHash
+    },
+
+    files: {
+      genesis: "/genesis.json",
+      chart_library: "/lightweight-charts.esm.js"
+    },
+
+    notes: [
+      "All hashes are computed from files actually served by this instance",
+      "No CDN runtime dependencies",
+      "Methodology frozen at publication",
+      "Weaving spiders come not here"
+    ],
+
+    generated_utc: new Date().toISOString()
+  });
+});
