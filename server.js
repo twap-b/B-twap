@@ -9,28 +9,29 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.use(cors());
 
-// ===== Load frozen genesis FX =====
+// ===== Frozen Genesis =====
 const genesis = JSON.parse(
   fs.readFileSync(path.join(__dirname, "genesis.json"), "utf8")
 );
 
-// ===== Constants (FROZEN) =====
+// ===== Constants =====
 const GOLD_G_PER_OZ = 31.1034768;
 const UNIT_BASE_GOLD_G = 0.9823;
 
 const GOLD_WEIGHT = 0.40;
 const FX_WEIGHT = 0.12;
 const FX_LIST = ["BRL", "RUB", "INR", "CNY", "ZAR"];
-
 const TWAP_WINDOW_MS = 5000;
 
 // ===== TWAP Storage =====
 let goldHistory = [];
 let fxHistory = {};
-FX_LIST.forEach(c => fxHistory[c] = []);
+FX_LIST.forEach(c => (fxHistory[c] = []));
+
+// ===== OHLC Storage =====
+const candles = {}; // { timeframe: [ {time,open,high,low,close} ] }
 
 // ===== Helpers =====
 function store(history, value) {
@@ -44,7 +45,11 @@ function twap(history) {
   return history.reduce((s, p) => s + p.v, 0) / history.length;
 }
 
-// ===== Live Market Fetch (Node 18+ native fetch) =====
+function candleTime(tsSec, tfMin) {
+  return Math.floor(tsSec / (tfMin * 60)) * tfMin * 60;
+}
+
+// ===== Market Fetch =====
 async function fetchGold() {
   const r = await fetch("https://api.metals.live/v1/spot/gold");
   const j = await r.json();
@@ -54,13 +59,13 @@ async function fetchGold() {
 async function fetchFX() {
   const r = await fetch(
     "https://api.exchangerate.host/latest?base=USD&symbols=" +
-    FX_LIST.join(",")
+      FX_LIST.join(",")
   );
   const j = await r.json();
   return j.rates;
 }
 
-// ===== Compute Unit =====
+// ===== Core Computation =====
 async function computeUnit() {
   const goldSpot = await fetchGold();
   const fxSpot = await fetchFX();
@@ -73,35 +78,69 @@ async function computeUnit() {
 
   FX_LIST.forEach(c => {
     fxHistory[c] = store(fxHistory[c], fxSpot[c]);
-    const fxT = twap(fxHistory[c]);
-    fxTWAP[c] = fxT;
-    ci += FX_WEIGHT * (fxT / genesis[c]);
+    const fxt = twap(fxHistory[c]);
+    fxTWAP[c] = fxt;
+    ci += FX_WEIGHT * (fxt / genesis[c]);
   });
 
   const basketIndex = GOLD_WEIGHT + ci;
   const unitGoldG = UNIT_BASE_GOLD_G * basketIndex;
   const unitUSD = unitGoldG * (goldTWAP / GOLD_G_PER_OZ);
 
-  return {
-    timestamp_utc: new Date().toISOString(),
-    gold_usd_per_oz_twap: goldTWAP,
-    unit_gold_grams: unitGoldG,
-    unit_usd: unitUSD,
-    hundred_units_usd: unitUSD * 100,
-    fx_usd_twap: fxTWAP
-  };
+  return { goldTWAP, unitGoldG, unitUSD, fxTWAP };
 }
 
-// ===== Route =====
+// ===== Routes =====
 app.get("/latest.json", async (_, res) => {
   try {
-    res.json(await computeUnit());
+    const d = await computeUnit();
+    const ts = Date.now();
+    const tsSec = Math.floor(ts / 1000);
+
+    // build candles
+    Object.keys(candles).forEach(tf => {
+      const t = candleTime(tsSec, tf);
+      let arr = candles[tf];
+
+      if (!arr.length || arr[arr.length - 1].time !== t) {
+        arr.push({
+          time: t,
+          open: d.unitUSD,
+          high: d.unitUSD,
+          low: d.unitUSD,
+          close: d.unitUSD
+        });
+        if (arr.length > 1000) arr.shift();
+      } else {
+        const c = arr[arr.length - 1];
+        c.high = Math.max(c.high, d.unitUSD);
+        c.low = Math.min(c.low, d.unitUSD);
+        c.close = d.unitUSD;
+      }
+    });
+
+    res.json({
+      timestamp_utc: new Date(ts).toISOString(),
+      gold_usd_per_oz_twap: d.goldTWAP,
+      unit_gold_grams: d.unitGoldG,
+      unit_usd: d.unitUSD,
+      hundred_units_usd: d.unitUSD * 100,
+      fx_usd_twap: d.fxTWAP
+    });
   } catch (e) {
-    console.error("Compute error:", e);
+    console.error(e);
     res.status(500).json({ error: "feed unavailable" });
   }
 });
 
+app.get("/ohlc", (req, res) => {
+  const tf = parseInt(req.query.timeframe || "1");
+  const limit = parseInt(req.query.limit || "1000");
+
+  candles[tf] ||= [];
+  res.json(candles[tf].slice(-limit));
+});
+
 app.listen(PORT, () =>
-  console.log(`BRICS Unit Basket v1 live on port ${PORT}`)
+  console.log(`BRICS Unit Basket v1 running on ${PORT}`)
 );
