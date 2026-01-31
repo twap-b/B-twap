@@ -2,19 +2,38 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import crypto from "crypto";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ===== Environment guard =====
+if (typeof fetch !== "function") {
+  throw new Error("Native fetch not available — Node 18+ required");
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.use(cors());
 
-// ===== Frozen Genesis =====
-const genesis = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "genesis.json"), "utf8")
-);
+app.use(cors());
+app.use(express.json());
+
+// ===== Optional: serve frontend if using same server =====
+app.use(express.static("public"));
+
+// ===== Load frozen genesis (Render-safe) =====
+const GENESIS_PATH = path.resolve(process.cwd(), "genesis.json");
+
+if (!fs.existsSync(GENESIS_PATH)) {
+  throw new Error("genesis.json not found at project root");
+}
+
+const genesis = JSON.parse(fs.readFileSync(GENESIS_PATH, "utf8"));
+
+// ===== Genesis checksum (auditable) =====
+const genesisHash = crypto
+  .createHash("sha256")
+  .update(JSON.stringify(genesis))
+  .digest("hex");
+
+console.log("Genesis FX SHA256:", genesisHash);
 
 // ===== Constants =====
 const GOLD_G_PER_OZ = 31.1034768;
@@ -77,6 +96,8 @@ async function computeUnit() {
   const fxTWAP = {};
 
   FX_LIST.forEach(c => {
+    if (!fxSpot[c]) return;
+
     fxHistory[c] = store(fxHistory[c], fxSpot[c]);
     const fxt = twap(fxHistory[c]);
     fxTWAP[c] = fxt;
@@ -97,10 +118,10 @@ app.get("/latest.json", async (_, res) => {
     const ts = Date.now();
     const tsSec = Math.floor(ts / 1000);
 
-    // build candles
+    // ---- build candles for all known timeframes ----
     Object.keys(candles).forEach(tf => {
       const t = candleTime(tsSec, tf);
-      let arr = candles[tf];
+      const arr = candles[tf];
 
       if (!arr.length || arr[arr.length - 1].time !== t) {
         arr.push({
@@ -128,7 +149,7 @@ app.get("/latest.json", async (_, res) => {
       fx_usd_twap: d.fxTWAP
     });
   } catch (e) {
-    console.error(e);
+    console.error("Compute error:", e);
     res.status(500).json({ error: "feed unavailable" });
   }
 });
@@ -137,10 +158,12 @@ app.get("/ohlc", (req, res) => {
   const tf = parseInt(req.query.timeframe || "1");
   const limit = parseInt(req.query.limit || "1000");
 
+  // ---- lazy init timeframe ----
   candles[tf] ||= [];
+
   res.json(candles[tf].slice(-limit));
 });
 
 app.listen(PORT, () =>
-  console.log(`BRICS Unit Basket v1 running on ${PORT}`)
+  console.log(`BRICS Unit Basket v1 running on port ${PORT}`)
 );
